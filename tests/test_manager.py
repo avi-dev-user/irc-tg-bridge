@@ -688,6 +688,20 @@ def test_discinfo_shows_detail_then_discback_returns_to_list():
     assert ("srv", "discinfo", f"{gen}.1") in cbs2
 
 
+def test_discovery_marks_channels_already_joined():
+    from tgbridge import menu as M
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    db.set_mapping("irc.libera.#in", 5, "primary")   # we are in #in, not #out
+    run(mgr.on_channel_list("libera", [{"channel": "#in", "users": 3, "topic": ""},
+                                       {"channel": "#out", "users": 8, "topic": ""}]))
+    gen = mgr._discovered["gen"]
+    _title, m = gw.menus[-1]
+    by_cb = {M.parse_cb(d): label for row in m for label, d in row}
+    assert by_cb[("srv", "discinfo", f"{gen}.0")].startswith("✓ #in")
+    assert "✓" not in by_cb[("srv", "discinfo", f"{gen}.1")]
+
+
 class FakeDiscoverRouter:
     def __init__(self):
         self.discovered = []

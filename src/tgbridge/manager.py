@@ -686,7 +686,8 @@ class Manager:
             else:
                 await self._gw.send_console(self._tr("discover.none"))
             return
-        picker = menu.discovered_menu(self._bound(), server, channels, gen)
+        picker = menu.discovered_menu(self._bound(), server, channels, gen,
+                                      self._joined_channels(server))
         if msg_id is not None:
             await self._gw.edit_menu(msg_id, self._tr("menu.discover"), picker)
         else:
@@ -702,7 +703,9 @@ class Manager:
         channels = disc["channels"]
         if not (0 <= index < len(channels)):
             return self._nav_view("servers")
-        return (menu.discovered_channel_title(self._bound(), channels[index]),
+        ch = channels[index]
+        joined = ch["channel"].lower() in self._joined_channels(disc["server"])
+        return (menu.discovered_channel_title(self._bound(), ch, joined),
                 menu.discovered_channel_menu(self._bound(), gen, index))
 
     def _discovered_list_view(self):
@@ -713,7 +716,14 @@ class Manager:
             return self._nav_view("servers")
         return (self._tr("menu.discover"),
                 menu.discovered_menu(self._bound(), disc["server"],
-                                     disc["channels"], disc["gen"]))
+                                     disc["channels"], disc["gen"],
+                                     self._joined_channels(disc["server"])))
+
+    def _joined_channels(self, server: str) -> set:
+        """Lower-cased names of the channels we are currently in on this server,
+        so the discovery views can mark which ones are already joined."""
+        return {row["buffer"].split(".", 2)[-1].lower()
+                for row in self._db.list_channels(server)}
 
     async def _join_discovered(self, arg: str):
         disc = self._discovered

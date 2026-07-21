@@ -220,10 +220,11 @@ def user_actions_menu(t, gen: int, index: int) -> Menu:
 _DISCOVER_TOPIC_MAX = 45
 
 
-def _discovered_label(ch: dict) -> str:
-    """A tidy one-line button: "#channel (users)" plus a trimmed topic when the
-    /LIST reply carried one, so the channel's purpose reads before joining."""
-    label = f"{ch['channel']} ({ch['users']})"
+def _discovered_label(ch: dict, joined: bool = False) -> str:
+    """A tidy one-line button: a check when we are already in the channel, then
+    "#channel (users)" plus a trimmed topic when the /LIST reply carried one, so
+    the channel's purpose (and whether you are in it) reads before joining."""
+    label = f"{'✓ ' if joined else ''}{ch['channel']} ({ch['users']})"
     topic = " ".join((ch.get("topic") or "").split())   # collapse newlines/runs
     if topic:
         if len(topic) > _DISCOVER_TOPIC_MAX:
@@ -232,25 +233,33 @@ def _discovered_label(ch: dict) -> str:
     return label
 
 
-def discovered_menu(t, server: str, channels: list[dict], gen: int) -> Menu:
-    """One tappable button per discovered channel (name, user count, and a
-    trimmed topic), referenced by index the same generation-tagged way as
-    channels_menu (never by name). Tapping opens the channel's detail view (not
-    an immediate join); Back returns to the server view."""
-    rows: Menu = [[(_discovered_label(ch), cb("srv", "discinfo", f"{gen}.{i}"))]
+def discovered_menu(t, server: str, channels: list[dict], gen: int,
+                    joined: Optional[set] = None) -> Menu:
+    """One tappable button per discovered channel (a check if already joined,
+    name, user count, and a trimmed topic), referenced by index the same
+    generation-tagged way as channels_menu (never by name). Tapping opens the
+    channel's detail view (not an immediate join); Back returns to the server
+    view. `joined` is the set of lower-cased channel names we are already in."""
+    joined = joined or set()
+    rows: Menu = [[(_discovered_label(ch, ch["channel"].lower() in joined),
+                    cb("srv", "discinfo", f"{gen}.{i}"))]
                   for i, ch in enumerate(channels)]
     rows.append([(t("menu.back"), cb("srv", "view", server))])
     return rows
 
 
-def discovered_channel_title(t, ch: dict) -> str:
-    """The detail message for one discovered channel: name, user count, and the
-    full topic (untruncated here, since it is message text not a button)."""
+def discovered_channel_title(t, ch: dict, joined: bool = False) -> str:
+    """The detail message for one discovered channel: name, user count, whether
+    you are already in it, and the full topic (untruncated here, since it is
+    message text not a button)."""
     name = ch["channel"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     topic = " ".join((ch.get("topic") or "").split())
     topic = topic.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     body = topic if topic else t("discover.no_topic")
-    return f"<b>{name}</b>\n👥 {ch['users']}\n\n{body}"
+    head = f"<b>{name}</b>\n👥 {ch['users']}"
+    if joined:
+        head = f"{head}\n{t('discover.already_joined')}"
+    return f"{head}\n\n{body}"
 
 
 def discovered_channel_menu(t, gen: int, index: int) -> Menu:

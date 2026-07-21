@@ -74,6 +74,7 @@
   "discover.none": "No channels matched.",
   "discover.join": "Join",
   "discover.no_topic": "No topic set.",
+  "discover.already_joined": "✓ You are already in this channel.",
   "nick.prompt": "Send the new nick.",
   "nick.changed": "Nick set to {nick}.",
   "nick.invalid": "That nick is not valid (ASCII letters/digits, no spaces). Send another.",

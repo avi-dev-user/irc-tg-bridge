@@ -319,6 +319,24 @@ def test_discovered_channel_title_shows_name_users_topic():
     assert "No topic set." in bare
 
 
+def test_discovered_menu_marks_joined_channels():
+    channels = [{"channel": "#in", "users": 3, "topic": ""},
+                {"channel": "#out", "users": 9, "topic": ""}]
+    m = menu.discovered_menu(bound("en"), "libera", channels, 3, joined={"#in"})
+    by_cb = {menu.parse_cb(d): label for row in m for label, d in row}
+    assert by_cb[("srv", "discinfo", "3.0")].startswith("✓ #in")   # joined: checked
+    assert by_cb[("srv", "discinfo", "3.1")].startswith("#out")    # not joined: plain
+    assert "✓" not in by_cb[("srv", "discinfo", "3.1")]
+
+
+def test_discovered_channel_title_notes_when_joined():
+    ch = {"channel": "#in", "users": 3, "topic": "hi"}
+    assert "already in this channel" in menu.discovered_channel_title(
+        bound("en"), ch, joined=True)
+    assert "already in this channel" not in menu.discovered_channel_title(
+        bound("en"), ch, joined=False)
+
+
 def test_server_settings_menu_has_ignores_button():
     m = menu.server_settings_menu(bound("en"), {"name": "libera"})
     flat = [b for row in m for b in row]

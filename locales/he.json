@@ -74,6 +74,7 @@
   "discover.none": "לא נמצאו ערוצים תואמים.",
   "discover.join": "הצטרף",
   "discover.no_topic": "אין נושא מוגדר.",
+  "discover.already_joined": "✓ אתה כבר בערוץ הזה.",
   "nick.prompt": "שלח את הכינוי החדש.",
   "nick.changed": "הכינוי שונה ל-{nick}.",
   "nick.invalid": "הכינוי אינו תקין (אותיות וספרות באנגלית בלבד, ללא רווחים). שלח כינוי אחר.",
