@@ -214,11 +214,30 @@ def user_actions_menu(t, gen: int, index: int) -> Menu:
     ]
 
 
+# Longest channel topic shown on a discovery button before it is trimmed. The
+# label is only cosmetic (the callback carries the index, not the text), so a
+# long topic cannot overflow callback_data; this just keeps the button tidy.
+_DISCOVER_TOPIC_MAX = 45
+
+
+def _discovered_label(ch: dict) -> str:
+    """A tidy one-line button: "#channel (users)" plus a trimmed topic when the
+    /LIST reply carried one, so the channel's purpose reads before joining."""
+    label = f"{ch['channel']} ({ch['users']})"
+    topic = " ".join((ch.get("topic") or "").split())   # collapse newlines/runs
+    if topic:
+        if len(topic) > _DISCOVER_TOPIC_MAX:
+            topic = topic[:_DISCOVER_TOPIC_MAX].rstrip() + "..."
+        label = f"{label} · {topic}"
+    return label
+
+
 def discovered_menu(t, server: str, channels: list[dict], gen: int) -> Menu:
-    """One tappable Join button per discovered channel, referenced by index the
-    same generation-tagged way as channels_menu (never by name). Back returns to
-    the server view the discovery was launched from."""
-    rows: Menu = [[(f"{ch['channel']} ({ch['users']})", cb("srv", "joinidx", f"{gen}.{i}"))]
+    """One tappable button per discovered channel (name, user count, and a
+    trimmed topic), referenced by index the same generation-tagged way as
+    channels_menu (never by name). Back returns to the server view the discovery
+    was launched from."""
+    rows: Menu = [[(_discovered_label(ch), cb("srv", "joinidx", f"{gen}.{i}"))]
                   for i, ch in enumerate(channels)]
     rows.append([(t("menu.back"), cb("srv", "view", server))])
     return rows

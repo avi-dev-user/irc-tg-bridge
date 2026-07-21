@@ -263,8 +263,25 @@ def test_discovered_menu_joins_by_generation_index():
     assert ("srv", "joinidx", "3.1") in by_cb
     assert "#python" in by_cb[("srv", "joinidx", "3.0")]
     assert "(4213)" in by_cb[("srv", "joinidx", "3.0")]
+    assert "Py" in by_cb[("srv", "joinidx", "3.0")]     # topic shown for context
     # names never leak into callback_data
     assert all("#" not in d for _, d in flat)
+
+
+def test_discovered_menu_topic_trimmed_and_optional():
+    long_topic = "welcome to the channel, please read the rules and be nice to everyone"
+    channels = [{"channel": "#chan", "users": 5, "topic": long_topic},
+                {"channel": "#bare", "users": 2, "topic": ""}]
+    m = menu.discovered_menu(bound("en"), "libera", channels, 3)
+    by_cb = {menu.parse_cb(d): label for row in m for label, d in row}
+    labeled = by_cb[("srv", "joinidx", "3.0")]
+    assert labeled.startswith("#chan (5) · welcome to the channel")
+    assert labeled.endswith("...")                       # a long topic is trimmed
+    assert len(labeled) < len(long_topic)
+    # a channel with no topic is just "name (users)", no trailing separator
+    assert by_cb[("srv", "joinidx", "3.1")] == "#bare (2)"
+    # topic text never leaks into callback_data
+    assert all("welcome" not in d for _, d in [b for row in m for b in row])
 
 
 def test_discovered_menu_has_back_to_server_view():
