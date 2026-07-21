@@ -235,12 +235,33 @@ def _discovered_label(ch: dict) -> str:
 def discovered_menu(t, server: str, channels: list[dict], gen: int) -> Menu:
     """One tappable button per discovered channel (name, user count, and a
     trimmed topic), referenced by index the same generation-tagged way as
-    channels_menu (never by name). Back returns to the server view the discovery
-    was launched from."""
-    rows: Menu = [[(_discovered_label(ch), cb("srv", "joinidx", f"{gen}.{i}"))]
+    channels_menu (never by name). Tapping opens the channel's detail view (not
+    an immediate join); Back returns to the server view."""
+    rows: Menu = [[(_discovered_label(ch), cb("srv", "discinfo", f"{gen}.{i}"))]
                   for i, ch in enumerate(channels)]
     rows.append([(t("menu.back"), cb("srv", "view", server))])
     return rows
+
+
+def discovered_channel_title(t, ch: dict) -> str:
+    """The detail message for one discovered channel: name, user count, and the
+    full topic (untruncated here, since it is message text not a button)."""
+    name = ch["channel"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    topic = " ".join((ch.get("topic") or "").split())
+    topic = topic.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    body = topic if topic else t("discover.no_topic")
+    return f"<b>{name}</b>\n👥 {ch['users']}\n\n{body}"
+
+
+def discovered_channel_menu(t, gen: int, index: int) -> Menu:
+    """Detail-view actions for one discovered channel: join it, or go back to the
+    list. The channel is referenced by the same generation.index as its list
+    button, so no channel name is packed into callback_data."""
+    ref = f"{gen}.{index}"
+    return [
+        [(t("discover.join"), cb("srv", "joinidx", ref))],
+        [(t("menu.back"), cb("srv", "discback"))],
+    ]
 
 
 def ignores_menu(t, server: str, nicks: list[str], gen: int) -> Menu:

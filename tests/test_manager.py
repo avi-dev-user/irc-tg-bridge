@@ -666,6 +666,28 @@ def test_discover_flags_router_when_present():
     assert fr.discovered == ["libera"]
 
 
+def test_discinfo_shows_detail_then_discback_returns_to_list():
+    from tgbridge import menu as M
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    chans = [{"channel": "#python", "users": 40, "topic": "Py chat"},
+             {"channel": "#weechat", "users": 5, "topic": ""}]
+    run(mgr.on_channel_list("libera", chans))   # populates _discovered + posts picker
+    gen = mgr._discovered["gen"]
+    # tapping a channel opens its detail, it does NOT join
+    title, m = run(mgr.on_callback(ADMIN, f"srv:discinfo:{gen}.0"))
+    assert "#python" in title and "40" in title and "Py chat" in title
+    assert be.commands == []
+    cbs = {M.parse_cb(d) for row in m for _, d in row}
+    assert ("srv", "joinidx", f"{gen}.0") in cbs   # Join actually joins
+    assert ("srv", "discback", "") in cbs          # Back to the list
+    # Back re-renders the discovered list
+    _t2, m2 = run(mgr.on_callback(ADMIN, "srv:discback"))
+    cbs2 = {M.parse_cb(d) for row in m2 for _, d in row}
+    assert ("srv", "discinfo", f"{gen}.0") in cbs2
+    assert ("srv", "discinfo", f"{gen}.1") in cbs2
+
+
 class FakeDiscoverRouter:
     def __init__(self):
         self.discovered = []
@@ -805,10 +827,10 @@ def test_on_channel_list_stores_and_builds_picker():
     _title, m = gw.menus[0]
     flat = [b for row in m for b in row]
     by_cb = {M.parse_cb(d): label for label, d in flat}
-    assert ("srv", "joinidx", f"{gen}.0") in by_cb
-    assert ("srv", "joinidx", f"{gen}.1") in by_cb
-    assert "#python" in by_cb[("srv", "joinidx", f"{gen}.0")]
-    assert "(4213)" in by_cb[("srv", "joinidx", f"{gen}.0")]
+    assert ("srv", "discinfo", f"{gen}.0") in by_cb   # tap opens detail, not join
+    assert ("srv", "discinfo", f"{gen}.1") in by_cb
+    assert "#python" in by_cb[("srv", "discinfo", f"{gen}.0")]
+    assert "(4213)" in by_cb[("srv", "discinfo", f"{gen}.0")]
     # channel names never leak into callback_data (index only)
     assert all("#" not in d for _, d in flat)
     # the picker returns to the server view the discovery was launched from

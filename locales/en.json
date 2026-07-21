@@ -72,6 +72,8 @@
   "channels.fetching": "Fetching channel list...",
   "channels.none": "No channels were returned - this network may not support channel listing.",
   "discover.none": "No channels matched.",
+  "discover.join": "Join",
+  "discover.no_topic": "No topic set.",
   "nick.prompt": "Send the new nick.",
   "nick.changed": "Nick set to {nick}.",
   "nick.invalid": "That nick is not valid (ASCII letters/digits, no spaces). Send another.",

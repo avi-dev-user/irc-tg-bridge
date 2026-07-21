@@ -452,6 +452,10 @@ class Manager:
             return await self._channel_command(action, name)
         elif action == "discover":
             return await self._discover_channels(name)
+        elif action == "discinfo":
+            return self._discovered_info(name)
+        elif action == "discback":
+            return self._discovered_list_view()
         elif action == "joinidx":
             return await self._join_discovered(name)
         elif action == "ignores":
@@ -687,6 +691,29 @@ class Manager:
             await self._gw.edit_menu(msg_id, self._tr("menu.discover"), picker)
         else:
             await self._gw.send_menu(self._tr("menu.discover"), picker)
+
+    def _discovered_info(self, arg: str):
+        """Detail view for a tapped discovered channel: name, users, full topic,
+        with Join / Back buttons (so a tap browses, it does not join by itself)."""
+        disc = self._discovered
+        gen, index = _split_index(arg)
+        if disc is None or gen != disc["gen"]:
+            return self._nav_view("servers")   # stale picker: ignore the tap
+        channels = disc["channels"]
+        if not (0 <= index < len(channels)):
+            return self._nav_view("servers")
+        return (menu.discovered_channel_title(self._bound(), channels[index]),
+                menu.discovered_channel_menu(self._bound(), gen, index))
+
+    def _discovered_list_view(self):
+        """Back from a channel detail to the discovered-channels list, re-rendered
+        from the stored result (same generation, so the join refs still match)."""
+        disc = self._discovered
+        if disc is None:
+            return self._nav_view("servers")
+        return (self._tr("menu.discover"),
+                menu.discovered_menu(self._bound(), disc["server"],
+                                     disc["channels"], disc["gen"]))
 
     async def _join_discovered(self, arg: str):
         disc = self._discovered

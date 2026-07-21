@@ -259,11 +259,11 @@ def test_discovered_menu_joins_by_generation_index():
     m = menu.discovered_menu(bound("en"), "libera", channels, 3)
     flat = [b for row in m for b in row]
     by_cb = {menu.parse_cb(d): label for label, d in flat}
-    assert ("srv", "joinidx", "3.0") in by_cb
-    assert ("srv", "joinidx", "3.1") in by_cb
-    assert "#python" in by_cb[("srv", "joinidx", "3.0")]
-    assert "(4213)" in by_cb[("srv", "joinidx", "3.0")]
-    assert "Py" in by_cb[("srv", "joinidx", "3.0")]     # topic shown for context
+    assert ("srv", "discinfo", "3.0") in by_cb
+    assert ("srv", "discinfo", "3.1") in by_cb
+    assert "#python" in by_cb[("srv", "discinfo", "3.0")]
+    assert "(4213)" in by_cb[("srv", "discinfo", "3.0")]
+    assert "Py" in by_cb[("srv", "discinfo", "3.0")]     # topic shown for context
     # names never leak into callback_data
     assert all("#" not in d for _, d in flat)
 
@@ -274,12 +274,12 @@ def test_discovered_menu_topic_trimmed_and_optional():
                 {"channel": "#bare", "users": 2, "topic": ""}]
     m = menu.discovered_menu(bound("en"), "libera", channels, 3)
     by_cb = {menu.parse_cb(d): label for row in m for label, d in row}
-    labeled = by_cb[("srv", "joinidx", "3.0")]
+    labeled = by_cb[("srv", "discinfo", "3.0")]
     assert labeled.startswith("#chan (5) · welcome to the channel")
     assert labeled.endswith("...")                       # a long topic is trimmed
     assert len(labeled) < len(long_topic)
     # a channel with no topic is just "name (users)", no trailing separator
-    assert by_cb[("srv", "joinidx", "3.1")] == "#bare (2)"
+    assert by_cb[("srv", "discinfo", "3.1")] == "#bare (2)"
     # topic text never leaks into callback_data
     assert all("welcome" not in d for _, d in [b for row in m for b in row])
 
@@ -295,8 +295,28 @@ def test_discovered_menu_has_back_to_server_view():
 def test_discovered_menu_empty_still_has_back():
     m = menu.discovered_menu(bound("en"), "libera", [], 1)
     flat = [b for row in m for b in row]
-    assert not any(menu.parse_cb(d)[:2] == ("srv", "joinidx") for _, d in flat)
+    assert not any(menu.parse_cb(d)[:2] == ("srv", "discinfo") for _, d in flat)
     assert any(menu.parse_cb(d) == ("srv", "view", "libera") for _, d in flat)
+
+
+def test_discovered_channel_menu_join_and_back():
+    m = menu.discovered_channel_menu(bound("en"), 3, 0)
+    by_cb = {menu.parse_cb(d): label for row in m for label, d in row}
+    assert ("srv", "joinidx", "3.0") in by_cb        # Join actually joins
+    assert by_cb[("srv", "joinidx", "3.0")] == "Join"
+    assert ("srv", "discback", "") in by_cb          # Back to the discovered list
+    assert all(len(d.encode("utf-8")) <= 64 for _, d in [b for row in m for b in row])
+
+
+def test_discovered_channel_title_shows_name_users_topic():
+    t = menu.discovered_channel_title(
+        bound("en"), {"channel": "#python", "users": 4213, "topic": "Python <chat>"})
+    assert "#python" in t and "4213" in t
+    assert "Python &lt;chat&gt;" in t                 # topic shown, HTML-escaped
+    # a channel with no topic falls back to a readable line, not an empty block
+    bare = menu.discovered_channel_title(
+        bound("en"), {"channel": "#bare", "users": 1, "topic": ""})
+    assert "No topic set." in bare
 
 
 def test_server_settings_menu_has_ignores_button():
