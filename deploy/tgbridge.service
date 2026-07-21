@@ -1,0 +1,20 @@
+[Unit]
+Description=irc-tg-bridge - Telegram bridge to WeeChat (irc-tg-bridge)
+After=network-online.target weechat-headless.service
+Wants=network-online.target
+Requires=weechat-headless.service
+
+[Service]
+Type=simple
+# Secrets and config: BOT_TOKEN, API_ID, API_HASH, ADMIN_TELEGRAM_ID,
+# RELAY_SECRET, RELAY_PORT. chmod 600, never committed.
+EnvironmentFile=/etc/irc-tg-bridge/env
+# Unbuffered so log lines reach the journal immediately.
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/irc-tg-bridge/src
+ExecStart=/opt/irc-tg-bridge/.venv/bin/python -m tgbridge.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

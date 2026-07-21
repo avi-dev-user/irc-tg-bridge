@@ -1,0 +1,17 @@
+[Unit]
+Description=WeeChat headless - IRC engine with api relay (irc-tg-bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Optional secrets (leading '-': missing file is not an error). Holds
+# WEECHAT_PASSPHRASE once IRC servers with saved passwords exist.
+EnvironmentFile=-/etc/irc-tg-bridge/env
+Environment=WEECHAT_PASSPHRASE=${SECURE_PASSPHRASE}
+ExecStart=/usr/bin/weechat-headless --dir /var/lib/irc-tg-bridge/weechat
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

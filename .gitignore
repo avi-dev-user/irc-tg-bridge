@@ -1,0 +1,28 @@
+# Secrets and local runtime state - never commit these
+.env
+*.env
+!.env.example
+state/
+*.state.json
+
+# Development-only docs (spec, planning) - local, never published
+docs/
+
+# WeeChat runtime data (config, encrypted secrets, logs)
+weechat-data/
+sec.conf
+*.conf
+!deploy/**/*.conf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+*.swp

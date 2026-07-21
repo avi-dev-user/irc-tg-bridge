@@ -1,0 +1,10 @@
+# Telegram: maintained Pyrogram fork (installs the `pyrogram` module, drop-in).
+# Pin the real package; do not install anything named "pyrogram" (typosquat risk).
+Kurigram>=2.2.0
+# Speeds up Kurigram's crypto; optional but recommended.
+TgCrypto>=1.2.5
+# WeeChat api relay client (REST + WebSocket).
+aiohttp>=3.9
+
+# Before deploying, run a vulnerability audit per policy:
+#   pip install pip-audit && pip-audit -r requirements.txt
