@@ -252,11 +252,21 @@ def parse_line(buffer: dict, body: dict, our_nick: Optional[str]):
 
     kind = next((k for tag, k in _EVENT_TAGS.items() if tag in tags), None)
     if kind:
-        if kind in ("join", "part") and nick and nick == our_nick:
-            return None  # our own join/leave; the buffer opened/closed signal reports it
         affects = bool(our_nick and (nick == our_nick or our_nick in text))
+        # Our own join line is dropped: the buffer-open signal reports a join
+        # reliably even before our nick is known. But leaving (our own /part) or
+        # being kicked out keeps the buffer open in WeeChat, so no buffer-close
+        # signal fires; mark those "closed" so the topic still gets handled.
+        if kind == "join" and nick == our_nick:
+            return None
+        lifecycle = None
+        if kind == "part" and nick == our_nick:
+            lifecycle = "closed"
+        elif kind == "kick" and nick != our_nick and affects:
+            lifecycle = "closed"
         return IrcEvent(server=server, buffer=buffer["name"], kind=kind,
-                        text=text, affects_me=affects, numeric=numeric, nick=nick)
+                        text=text, affects_me=affects, numeric=numeric,
+                        nick=nick, lifecycle=lifecycle)
 
     # server notices/numerics: surface on the server buffer only, as context.
     if btype == "server" and (is_notice or "irc_numeric" in tags):

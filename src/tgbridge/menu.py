@@ -263,13 +263,27 @@ def discovered_channel_title(t, ch: dict, joined: bool = False) -> str:
 
 
 def discovered_channel_menu(t, gen: int, index: int) -> Menu:
-    """Detail-view actions for one discovered channel: join it, or go back to the
-    list. The channel is referenced by the same generation.index as its list
-    button, so no channel name is packed into callback_data."""
+    """Detail-view actions for one discovered channel: join it, go back to the
+    list to browse others, or jump to the main menu. The channel is referenced
+    by the same generation.index as its list button, so no channel name is
+    packed into callback_data."""
     ref = f"{gen}.{index}"
     return [
         [(t("discover.join"), cb("srv", "joinidx", ref))],
-        [(t("menu.back"), cb("srv", "discback"))],
+        [(t("menu.back"), cb("srv", "discback")),
+         (t("menu.main"), cb("nav", "main"))],
+    ]
+
+
+def channel_left_menu(t, topic_id: int) -> Menu:
+    """Offered in a channel's topic when we leave it (part, kick, or the buffer
+    closing): close the topic, keep it open, or delete it outright. The topic id
+    is the callback arg, so no channel name is packed into callback_data."""
+    tid = str(topic_id)
+    return [
+        [(t("channel.close"), cb("chan", "close", tid))],
+        [(t("channel.keep"), cb("chan", "keep", tid))],
+        [(t("channel.delete"), cb("chan", "delete", tid))],
     ]
 
 

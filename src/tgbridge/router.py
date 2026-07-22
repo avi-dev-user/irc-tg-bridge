@@ -18,6 +18,7 @@ import time
 from typing import Optional, Protocol
 
 from . import gofile
+from . import menu
 from .commands import parse_list_reply, parse_names_reply
 from .filewatch import parse_xfer_filename
 from .formatting import looks_like_art, mirc_to_html, split_for_irc
@@ -179,6 +180,8 @@ class Gateway(Protocol):
     async def send_typing(self, topic_id: int) -> None: ...
     async def close_topic(self, topic_id: int) -> None: ...
     async def reopen_topic(self, topic_id: int) -> None: ...
+    async def delete_topic(self, topic_id: int) -> None: ...
+    async def send_menu_in(self, topic_id: int, title: str, menu) -> int: ...
     @property
     def chat_id(self) -> int: ...
     @property
@@ -564,6 +567,13 @@ class Router:
                     buffer = f"irc.server.{e.server}"
                 topic_id = await self._ensure_topic(buffer, self._server_title(e.server))
         else:
+            # We left this channel (part, kick, or the buffer closing). A plain
+            # /part leaves the buffer open, so the part line is the trigger, but a
+            # later buffer close would arrive as a second "closed" for the same
+            # channel. Act only while it is still marked open, so the user is asked
+            # once, not twice, and a stray "closed" never spawns a phantom topic.
+            if e.lifecycle == "closed" and not self._db.channel_is_open(e.buffer):
+                return
             # Ensure the channel's topic exists even when this event is filtered
             # noise, so joining a channel makes its topic appear right away.
             channel = e.buffer.split(".", 2)[-1]
@@ -577,15 +587,19 @@ class Router:
                 # are de-duplicated by msgid, so this never double-posts.
                 await self.request_backfill(e.buffer, self._db.last_seen(e.buffer))
             elif e.lifecycle == "closed":
-                # parted/kicked: drop it from the joined list so it is not
-                # auto-rejoined, while keeping the mapping so the topic reopens.
+                # Drop it from the joined list so it is not auto-rejoined, while
+                # keeping the mapping so the topic can reopen on rejoin.
                 self._db.set_channel_open(e.buffer, False)
-                # push any pending lines (e.g. a kick reason) before the topic
-                # closes, so they are not stranded behind the closure notice.
+                # push any pending lines (e.g. a kick reason) first, so they are
+                # not stranded behind the notice.
                 await self._flush(topic_id)
                 await self._gw.send(topic_id, "<i>" + _escape(e.text) + "</i>",
                                     owner_bot=self._owner_for(topic_id))
-                await self._gw.close_topic(topic_id)
+                # Ask what to do with the now-orphaned topic instead of closing it
+                # unilaterally: close, keep open, or delete.
+                await self._gw.send_menu_in(
+                    topic_id, self._t("channel.left_prompt"),
+                    menu.channel_left_menu(self._t, topic_id))
                 return
             if e.kind == "private":
                 return   # PM open: the topic now exists, nothing to announce

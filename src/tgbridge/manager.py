@@ -199,12 +199,37 @@ class Manager:
             return
 
         if text.startswith("/"):
-            # Raw IRC command passthrough. IRC commands (/join, /mode, ...) must
-            # run on a server buffer, not core; route to the one server if there
-            # is exactly one, otherwise fall back to core.
-            servers = self._db.list_servers()
-            buf = f"irc.server.{servers[0]['name']}" if len(servers) == 1 else CORE_BUFFER
+            # Raw IRC command passthrough. IRC commands (/join, /part, /mode, ...)
+            # must run on a server buffer, not core.
+            buf = self._console_buffer_for(text)
+            if buf is None:
+                channel = self._command_channel(text)
+                await self._gw.send_console(
+                    self._tr("console.ambiguous_channel", channel=channel))
+                return
             await self._backend.send_command(buf, text)
+
+    @staticmethod
+    def _command_channel(text: str) -> str:
+        """The channel a raw command names (first #&+! token), or "" if none."""
+        return next((t for t in text.split() if t[:1] in "#&+!"), "")
+
+    def _console_buffer_for(self, text: str) -> Optional[str]:
+        """Buffer a raw console command should run on. A command naming a channel
+        runs on the server that channel is joined on; with a single server, use
+        it; otherwise fall back to core. Returns None if the channel is joined on
+        more than one server, since the console cannot tell which one is meant."""
+        channel = self._command_channel(text)
+        if channel:
+            hosts = [s["name"] for s in self._db.list_servers()
+                     if any(c["buffer"].split(".", 2)[-1] == channel
+                            for c in self._db.list_channels(s["name"]))]
+            if len(hosts) == 1:
+                return f"irc.server.{hosts[0]}"
+            if len(hosts) > 1:
+                return None
+        servers = self._db.list_servers()
+        return f"irc.server.{servers[0]['name']}" if len(servers) == 1 else CORE_BUFFER
 
     def _flow_menu(self):
         rows = []
@@ -344,6 +369,8 @@ class Manager:
             return (self._tr(f"help.cat.{arg}"), back)
         if ns == "nav":
             return self._nav_view(action)
+        if ns == "chan":
+            return await self._left_channel_action(action, arg)
         if ns == "srv":
             return await self._server_action(action, arg)
         if ns == "usr":
@@ -384,6 +411,27 @@ class Manager:
         self._sender_list = {"gen": gen, "senders": senders}
         title = self._tr("senders.title") if senders else self._tr("senders.none")
         return (title, menu.senders_menu(self._bound(), senders, gen))
+
+    async def _left_channel_action(self, action: str, arg: str):
+        """The leave-a-channel prompt was answered: close the topic, keep it open,
+        or delete it. The tapped message is the prompt itself, so a returned view
+        edits it in place into a plain confirmation; delete removes it outright."""
+        try:
+            topic_id = int(arg)
+        except ValueError:
+            return None
+        if action == "close":
+            await self._gw.close_topic(topic_id)
+            return (self._tr("channel.closed"), None)
+        if action == "keep":
+            return (self._tr("channel.kept"), None)
+        if action == "delete":
+            buffer = self._db.buffer_for_topic(topic_id)
+            if buffer:
+                self._db.remove_mapping(buffer)
+            await self._gw.delete_topic(topic_id)
+            return None
+        return None
 
     async def _server_action(self, action: str, name: str):
         if action == "add":

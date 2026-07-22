@@ -42,6 +42,14 @@ class FakeGW:
         self.started_senders = getattr(self, "started_senders", [])
         self.started_senders.extend(senders)
 
+    async def close_topic(self, topic_id):
+        self.closed = getattr(self, "closed", [])
+        self.closed.append(topic_id)
+
+    async def delete_topic(self, topic_id):
+        self.deleted_topics = getattr(self, "deleted_topics", [])
+        self.deleted_topics.append(topic_id)
+
 
 class FakeBackend:
     def __init__(self):
@@ -79,6 +87,55 @@ def test_raw_command_passthrough():
     mgr, db, gw, be = make()
     run(mgr.on_console_text(ADMIN, 1, "/whois someone"))
     assert be.commands == [(CORE_BUFFER, "/whois someone")]
+
+
+def test_console_channel_command_routes_to_hosting_server():
+    # with several servers, a command naming a channel must run on the server
+    # that channel is joined on, not core (where it is a silent no-op).
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    db.upsert_server("hebits")
+    db.set_mapping("irc.libera.#electronics", 10, "primary")
+    run(mgr.on_console_text(ADMIN, 1, "/part #electronics"))
+    assert be.commands == [("irc.server.libera", "/part #electronics")]
+
+
+def test_console_ambiguous_channel_asks_to_use_the_topic():
+    # the same channel joined on two servers cannot be resolved from the console.
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    db.upsert_server("oftc")
+    db.set_mapping("irc.libera.#chat", 10, "primary")
+    db.set_mapping("irc.oftc.#chat", 11, "primary")
+    run(mgr.on_console_text(ADMIN, 1, "/part #chat"))
+    assert be.commands == []                       # not sent to a wrong server
+    assert any("#chat" in c for c in gw.console)   # told to use the topic
+
+
+def test_leave_prompt_close_closes_the_topic():
+    mgr, db, gw, be = make()
+    db.set_mapping("irc.libera.#electronics", 55, "primary")
+    view = run(mgr.on_callback(ADMIN, "chan:close:55"))
+    assert getattr(gw, "closed", []) == [55]
+    assert view and view[0] == mgr._tr("channel.closed")
+
+
+def test_leave_prompt_delete_removes_topic_and_mapping():
+    mgr, db, gw, be = make()
+    db.set_mapping("irc.libera.#electronics", 55, "primary")
+    view = run(mgr.on_callback(ADMIN, "chan:delete:55"))
+    assert getattr(gw, "deleted_topics", []) == [55]
+    assert db.buffer_for_topic(55) is None      # mapping forgotten
+    assert view is None                         # message goes with the topic
+
+
+def test_leave_prompt_keep_leaves_topic_intact():
+    mgr, db, gw, be = make()
+    db.set_mapping("irc.libera.#electronics", 55, "primary")
+    view = run(mgr.on_callback(ADMIN, "chan:keep:55"))
+    assert getattr(gw, "closed", []) == [] and getattr(gw, "deleted_topics", []) == []
+    assert db.buffer_for_topic(55) == "irc.libera.#electronics"
+    assert view and view[0] == mgr._tr("channel.kept")
 
 
 def test_addserver_flow_end_to_end_with_anon():

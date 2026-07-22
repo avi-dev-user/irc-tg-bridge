@@ -155,11 +155,38 @@ def test_channel_and_private_open_are_mutually_exclusive():
     assert private_open_event(pm) is not None and channel_join_event(pm) is None
 
 
+def test_own_part_line_is_a_closed_lifecycle():
+    # /part leaves the WeeChat buffer open, so no buffer-close signal fires; the
+    # part line itself must surface leaving as a "closed" lifecycle.
+    body = {"message": "tgb (tgb@host) has left #weechat", "tags": ["irc_part",
+            "nick_tgb"], "highlight": False}
+    ev = parse_line(CHAN_BUF, body, "tgb")
+    assert isinstance(ev, IrcEvent) and ev.kind == "part" and ev.lifecycle == "closed"
+
+
+def test_other_part_line_is_not_a_leave():
+    # someone else parting is ambient noise, never our own "closed" lifecycle.
+    body = {"message": "bob (bob@host) has left #weechat", "tags": ["irc_part",
+            "nick_bob"], "highlight": False}
+    ev = parse_line(CHAN_BUF, body, "tgb")
+    assert isinstance(ev, IrcEvent) and ev.kind == "part" and ev.lifecycle is None
+
+
 def test_kick_affecting_me():
     body = {"message": "tgb was kicked by op (spam)", "tags": ["irc_kick", "nick_op"],
             "highlight": False}
     ev = parse_line(CHAN_BUF, body, "tgb")
     assert isinstance(ev, IrcEvent) and ev.kind == "kick" and ev.affects_me is True
+    # being kicked is a leave: the buffer stays, so mark it closed
+    assert ev.lifecycle == "closed"
+
+
+def test_kicking_someone_else_is_not_my_leave():
+    # we do the kicking (we are the acting nick): we stay in the channel.
+    body = {"message": "bob was kicked by tgb (spam)", "tags": ["irc_kick",
+            "nick_tgb"], "highlight": False}
+    ev = parse_line(CHAN_BUF, body, "tgb")
+    assert isinstance(ev, IrcEvent) and ev.kind == "kick" and ev.lifecycle is None
 
 
 def test_noise_is_dropped():

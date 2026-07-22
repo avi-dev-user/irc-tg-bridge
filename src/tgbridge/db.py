@@ -318,6 +318,20 @@ class Database:
             "UPDATE mapping SET open = ? WHERE buffer = ?", (int(is_open), buffer))
         self._conn.commit()
 
+    def remove_mapping(self, buffer: str) -> None:
+        # Forget a topic entirely (its Telegram topic was deleted). Unlike a part,
+        # which keeps the row so the topic reopens on rejoin, this drops it; a
+        # later rejoin creates a fresh topic.
+        self._conn.execute("DELETE FROM mapping WHERE buffer = ?", (buffer,))
+        self._conn.commit()
+
+    def channel_is_open(self, buffer: str) -> bool:
+        # Whether we are currently in this channel. False when it was parted or
+        # never mapped, so a duplicate "left" signal is a no-op.
+        row = self._conn.execute(
+            "SELECT open FROM mapping WHERE buffer = ?", (buffer,)).fetchone()
+        return bool(row["open"]) if row else False
+
     def buffer_for_topic(self, topic_id: int) -> Optional[str]:
         row = self._conn.execute(
             "SELECT buffer FROM mapping WHERE topic_id = ?", (topic_id,)

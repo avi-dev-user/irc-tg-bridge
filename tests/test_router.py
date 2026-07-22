@@ -42,6 +42,8 @@ class FakeGateway:
         self.deleted = []
         self.closed = []
         self.reopened = []
+        self.deleted_topics = []
+        self.menus_in = []
         self.typing = []
         self._topic = 100
         self._msg = 500
@@ -72,6 +74,14 @@ class FakeGateway:
 
     async def reopen_topic(self, topic_id):
         self.reopened.append(topic_id)
+
+    async def delete_topic(self, topic_id):
+        self.deleted_topics.append(topic_id)
+
+    async def send_menu_in(self, topic_id, title, menu):
+        self._msg += 1
+        self.menus_in.append((topic_id, title, menu))
+        return self._msg
 
     async def send_typing(self, topic_id):
         self.typing.append(topic_id)
@@ -311,17 +321,43 @@ def test_private_open_reuses_existing_topic():
     assert gw.sent == []
 
 
-def test_channel_closed_lifecycle_sends_notice_then_closes_topic():
+def _join_open(r, gw, buffer="irc.lt.#weechat"):
+    """Drive a join so the channel is mapped and marked open, returning its
+    topic id. Leaving is only acted on for a channel we are in."""
+    run(r.handle_irc(IrcEvent(server="lt", buffer=buffer, kind="join",
+                              text="Joined", affects_me=True, lifecycle="opened")))
+    return gw.created[-1][0]
+
+
+def test_channel_closed_lifecycle_sends_notice_then_prompts():
     gw, irc, db = FakeGateway(), FakeIrc(), _db()
     db.upsert_server("lt")
     r = Router(db, gw, irc)
+    topic_id = _join_open(r, gw)
     run(r.handle_irc(IrcEvent(server="lt", buffer="irc.lt.#weechat", kind="part",
                               text="No longer in #weechat", affects_me=True,
                               lifecycle="closed")))
-    topic_id = gw.created[0][0]
-    assert gw.sent == [(topic_id, "<i>No longer in #weechat</i>", None)]
-    assert gw.closed == [topic_id]
-    assert gw.reopened == []
+    assert (topic_id, "<i>No longer in #weechat</i>", None) in gw.sent
+    # not closed unilaterally: the user is asked what to do with the topic
+    assert gw.closed == []
+    assert len(gw.menus_in) == 1 and gw.menus_in[0][0] == topic_id
+    assert db.channel_is_open("irc.lt.#weechat") is False
+
+
+def test_leaving_a_channel_we_are_not_in_is_ignored():
+    # a stray "closed" (or a duplicate one after the first was handled) must not
+    # spawn a phantom topic or ask a second time.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("lt")
+    r = Router(db, gw, irc)
+    topic_id = _join_open(r, gw)
+    closed = IrcEvent(server="lt", buffer="irc.lt.#weechat", kind="part",
+                      text="No longer in #weechat", affects_me=True,
+                      lifecycle="closed")
+    run(r.handle_irc(closed))
+    run(r.handle_irc(closed))   # second signal for the same leave
+    assert len(gw.menus_in) == 1   # asked once, not twice
+    assert len(gw.created) == 1    # no phantom topic
 
 
 def test_channel_closed_lifecycle_flushes_pending_before_notice():
@@ -329,6 +365,7 @@ def test_channel_closed_lifecycle_flushes_pending_before_notice():
     gw, irc, db = FakeGateway(), FakeIrc(), _db()
     db.upsert_server("lt")
     r = Router(db, gw, irc)
+    topic_id = _join_open(r, gw)
 
     async def go():
         await r.handle_irc(IrcEvent(server="lt", buffer="irc.lt.#weechat",
@@ -338,10 +375,13 @@ def test_channel_closed_lifecycle_flushes_pending_before_notice():
                                     kind="part", text="No longer in #weechat",
                                     affects_me=True, lifecycle="closed"))
     run(go())
-    topic_id = gw.created[0][0]
     bodies = [html for tid, html, _ in gw.sent if tid == topic_id]
-    assert bodies == ["<b><i>kicked (spam)</i></b>", "<i>No longer in #weechat</i>"]
-    assert gw.closed == [topic_id]
+    joined = "\n".join(bodies)
+    # the queued kick reason is flushed ahead of the leave notice, which is the
+    # last thing sent before the prompt
+    assert joined.index("kicked (spam)") < joined.index("No longer in #weechat")
+    assert bodies[-1] == "<i>No longer in #weechat</i>"
+    assert gw.menus_in and gw.menus_in[0][0] == topic_id
 
 
 def test_server_event_goes_to_server_topic():

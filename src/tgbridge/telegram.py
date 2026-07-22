@@ -285,11 +285,21 @@ class TelegramGateway:
         ])
 
     async def send_menu(self, title: str, menu) -> int:
+        return await self.send_menu_in(self._console_topic_id, title, menu)
+
+    async def send_menu_in(self, topic_id: int, title: str, menu) -> int:
         await self._pace()
         msg = await self._client.send_message(
-            self._group_chat_id, title, message_thread_id=self._console_topic_id,
+            self._group_chat_id, title, message_thread_id=topic_id,
             reply_markup=self._kb(menu), parse_mode=enums.ParseMode.HTML)
         return msg.id
+
+    async def delete_topic(self, topic_id: int) -> None:
+        # Best-effort: drop the whole topic when the user asks to delete it.
+        try:
+            await self._client.delete_forum_topic(self._group_chat_id, topic_id)
+        except Exception:
+            pass
 
     async def _on_text(self, _c, message) -> None:
         if message.from_user is None:
