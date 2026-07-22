@@ -27,7 +27,7 @@ from .commands import strip_bot_mention
 # in-place edit. menu is rows of (label, callback_data).
 View = Optional[tuple]
 ConsoleText = Callable[[int, int, str], Awaitable[None]]   # (from_id, message_id, text)
-Callback = Callable[[int, str], Awaitable[View]]           # (from_id, callback_data) -> view
+Callback = Callable[[int, str, int], Awaitable[View]]      # (from_id, callback_data, message_id) -> view
 # (topic_id, message_id, text, reply_to)
 Conversation = Callable[[int, int, str, Optional[int]], Awaitable[None]]
 # (from_id, kind, chat_id, chat_type) -> view
@@ -400,7 +400,8 @@ class TelegramGateway:
     async def _on_cb(self, _c, query) -> None:
         try:
             if self._on_callback:
-                view = await self._on_callback(query.from_user.id, query.data)
+                view = await self._on_callback(query.from_user.id, query.data,
+                                               query.message.id)
                 if view:
                     text, menu = view
                     try:

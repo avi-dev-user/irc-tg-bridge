@@ -169,6 +169,35 @@ def test_join_action_prompts_with_cancel_and_sets_pending():
     assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
 
 
+def test_answering_a_prompt_edits_it_in_place_with_a_back_button():
+    # A prompt is rendered into the tapped message; answering it should edit
+    # that same message (Cancel gone, result + a single Back button), not leave
+    # the prompt behind and drop the result as a fresh console message.
+    from tgbridge import menu as M
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    run(mgr.on_callback(ADMIN, "srv:join:libera", 555))   # tapped message id 555
+    run(mgr.on_console_text(ADMIN, 1, "#test"))
+    assert gw.edits and gw.edits[-1][0] == 555            # same message edited
+    _mid, title, m = gw.edits[-1]
+    assert "#test" in title
+    flat = [b for row in m for b in row]
+    assert any(M.parse_cb(d) == ("srv", "view", "libera") for _, d in flat)
+    assert not any(M.parse_cb(d)[0] == "flow" for _, d in flat)  # Cancel gone
+    assert gw.console == []                                # not echoed as console
+
+
+def test_prompt_without_a_message_id_falls_back_to_console():
+    # /cancel-style entry points call on_callback with no message id; the result
+    # then has nowhere to be edited and must fall back to a console message.
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    run(mgr.on_callback(ADMIN, "srv:join:libera"))        # no message id
+    run(mgr.on_console_text(ADMIN, 1, "#test"))
+    assert gw.edits == []
+    assert any("#test" in c for c in gw.console)
+
+
 def test_identify_action_prompts_and_sets_pending():
     from tgbridge import menu as M
     mgr, db, gw, be = make()

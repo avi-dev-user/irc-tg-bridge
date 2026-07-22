@@ -50,6 +50,11 @@ class Manager:
         self._addflow: Optional[AddServerFlow] = None
         self._flow_msg_id: Optional[int] = None  # the one flow message we edit in place
         self._pending: Optional[tuple] = None   # (action, server) awaiting one text answer
+        # The message a text prompt is shown in, and the callback to return to
+        # when it is answered, so the prompt is edited in place (Cancel -> Back +
+        # result) instead of leaving a stale prompt with a dangling Cancel.
+        self._prompt_msg_id: int = 0
+        self._prompt_back: str = ""
         # After a server is added we keep editing its flow message: first to
         # "connecting", then to "connected"/"failed" once the router reports back.
         self._connect_msg: dict[str, int] = {}
@@ -91,6 +96,19 @@ class Manager:
     def _tr(self, key: str, **params) -> str:
         return self._t(key, self._lang(), **params)
 
+    async def _finish_prompt(self, text: str) -> None:
+        """A text prompt was answered: edit its message into the result plus a
+        single Back button, so its Cancel is gone and there is a way back. Falls
+        back to a plain console message when there is no prompt message to edit."""
+        back = self._prompt_back or menu.cb("nav", "main")
+        if self._prompt_msg_id:
+            await self._gw.edit_menu(self._prompt_msg_id, text,
+                                     [[(self._tr("menu.back"), back)]])
+        else:
+            await self._gw.send_console(text)
+        self._prompt_msg_id = 0
+        self._prompt_back = ""
+
     async def on_console_text(self, from_id: int, message_id: int, text: str) -> None:
         if from_id != self._admin_id:
             return  # management is admin-only (default-deny)
@@ -104,13 +122,14 @@ class Manager:
                     channel = "#" + channel
                 # /join must run on the server buffer, not core
                 await self._backend.send_command(f"irc.server.{server}", f"/join {channel}")
-                await self._gw.send_console(self._tr("channels.joined_ok", channel=channel))
+                await self._finish_prompt(self._tr("channels.joined_ok", channel=channel))
             elif action == "identify":
                 # Identify to NickServ on the server buffer, then scrub the
                 # password message so it does not linger in the chat history.
                 await self._backend.send_command(
                     f"irc.server.{server}", f"/msg NickServ IDENTIFY {text.strip()}")
                 await self._gw.delete_message(message_id)
+                await self._finish_prompt(self._tr("nickserv.identified"))
             elif action == "register":
                 # Register the current nick with NickServ. The first token is the
                 # password, an optional second token is a contact email. Scrub the
@@ -123,17 +142,17 @@ class Manager:
                     register += f" {email}"
                 await self._backend.send_command(f"irc.server.{server}", register)
                 await self._gw.delete_message(message_id)
-                await self._gw.send_console(self._tr("nickserv.registered"))
+                await self._finish_prompt(self._tr("nickserv.registered"))
             elif action == "perform":
-                # Store one on-connect command line; it replaces any previous
-                # perform (see Database.set_perform).
+                # Store the on-connect commands, one per line; this replaces the
+                # whole set (see Database.set_perform).
                 self._db.set_perform(server, text.strip())
-                await self._gw.send_console(self._tr("perform.saved"))
+                await self._finish_prompt(self._tr("perform.saved"))
             elif action == "ignore":
                 nick = text.strip()
                 if nick:
                     self._db.add_ignore(server, nick)
-                    await self._gw.send_console(
+                    await self._finish_prompt(
                         self._tr("ignores.added", nick=nick))
             elif action == "nick":
                 nick = text.strip()
@@ -144,7 +163,7 @@ class Manager:
                 else:
                     await self._backend.send_command(
                         f"irc.server.{server}", f"/nick {nick}")
-                    await self._gw.send_console(
+                    await self._finish_prompt(
                         self._tr("nick.changed", nick=nick))
             elif action == "addsender":
                 # A Telegram bot token is "<bot_id>:<secret>"; the id prefix is a
@@ -164,7 +183,7 @@ class Manager:
                     # restart needed (start_senders skips one already running).
                     await self._gw.start_senders(
                         [{"bot_id": bot_id, "token": token}])
-                    await self._gw.send_console(
+                    await self._finish_prompt(
                         self._tr("senders.added", bot_id=bot_id))
             return
 
@@ -283,10 +302,14 @@ class Manager:
             return (self._tr("onboard.group_saved"), None)
         return None
 
-    async def on_callback(self, from_id: int, data: str):
+    async def on_callback(self, from_id: int, data: str, message_id: int = 0):
         """Handle a button tap; return the view to render in place, or None."""
         if from_id != self._admin_id:
             return None
+        # The message this tap is on is the one a prompt gets rendered into, so
+        # remember it: when the prompt is answered we edit it in place (drop its
+        # Cancel, show the result and a Back button) instead of leaving it behind.
+        self._prompt_msg_id = message_id
         ns, action, arg = menu.parse_cb(data)
         # A pending text prompt (join/identify/nick/perform/ignore) offers only a
         # Cancel button; tapping anything else means the user walked away from it,
@@ -370,32 +393,41 @@ class Manager:
             return None
         if action == "join":
             self._pending = ("join", name)
+            self._prompt_back = menu.cb("srv", "view", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("channels.join_prompt"), cancel)
         if action == "identify":
             self._pending = ("identify", name)
+            self._prompt_back = menu.cb("srv", "settings", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("nickserv.prompt"), cancel)
         if action == "register":
             self._pending = ("register", name)
+            self._prompt_back = menu.cb("srv", "settings", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("nickserv.register_prompt"), cancel)
         if action == "perform":
             self._pending = ("perform", name)
+            self._prompt_back = menu.cb("srv", "settings", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             current = self._db.get_perform(name)
             prompt = self._tr("perform.prompt")
             if current:
-                # show what is set now so the user is not editing blind (it may
-                # hold a password, but this is the admin's own private console).
-                prompt = f"{self._tr('perform.current', cmd=current)}\n\n{prompt}"
+                # show what is set now (monospace) so the user is not editing
+                # blind; it may hold a password, but this is the admin's own console.
+                safe = (current.replace("&", "&amp;").replace("<", "&lt;")
+                        .replace(">", "&gt;"))
+                prompt = (f"{self._tr('perform.current', cmd=f'<code>{safe}</code>')}"
+                          f"\n\n{prompt}")
             return (prompt, cancel)
         if action == "ignoreadd":
             self._pending = ("ignore", name)
+            self._prompt_back = menu.cb("srv", "ignores", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("ignores.add_prompt"), cancel)
         if action == "nick":
             self._pending = ("nick", name)
+            self._prompt_back = menu.cb("srv", "view", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("nick.prompt"), cancel)
         if action == "reconnect":
@@ -813,6 +845,7 @@ class Manager:
             self._db.set("tor_default", not self._db.get_bool("tor_default"))
         elif action == "senderadd":
             self._pending = ("addsender", "")
+            self._prompt_back = menu.cb("nav", "senders")
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
             return (self._tr("senders.add_prompt"), cancel)
         elif action == "senderdel":
