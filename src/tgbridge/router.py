@@ -469,6 +469,13 @@ class Router:
             topic_id = await self._ensure_topic(m.buffer, self._server_title(m.server))
             self._emit(topic_id, self._render_message(m))
             return
+        if m.is_notice:
+            # a notice is an informational burst (a multi-line NickServ reply, a
+            # bot line), not conversation; coalesce it into its topic instead of
+            # one Telegram message per line, the way events are batched.
+            topic_id = await self._ensure_topic(m.buffer, _topic_title(m))
+            self._emit(topic_id, self._render_message(m))
+            return
         topic_id = await self._ensure_topic(m.buffer, _topic_title(m))
         self._stop_typing(topic_id)   # the message arrived; drop the typing hint
         html = self._render_message(m)
@@ -514,6 +521,11 @@ class Router:
         # terminator (318) flushes it. Disjoint from the error numerics below.
         if e.numeric in _WHOIS_NUMERICS or e.numeric == _WHOIS_END:
             await self._collect_whois(e)
+            return
+        # Our own CHATHISTORY backfill probe draws a 421 "unknown command" on a
+        # server without the extension. It is internal, not something the user
+        # typed, so stay quiet instead of surfacing that error every rejoin.
+        if e.numeric == 421 and "CHATHISTORY" in e.text.upper():
             return
         # A known error numeric becomes a clear warning line instead of the raw
         # code; numerics with no friendly mapping fall through to raw handling.
@@ -984,7 +996,12 @@ class Router:
             await self._gw.react(message_id, _ACK_WORKING)
         try:
             if is_command:
-                await self._irc.send_command(buffer, text)
+                # A pasted block can hold several commands, one per line; run each
+                # so "/nick x" + "/msg NickServ ..." both fire, not just the first.
+                for cmd_line in text.split("\n"):
+                    cmd_line = cmd_line.strip()
+                    if cmd_line:
+                        await self._irc.send_command(buffer, cmd_line)
             else:
                 # A Telegram message can carry newlines and exceed the IRC line
                 # limit; send each wrapped line as its own PRIVMSG, in order.

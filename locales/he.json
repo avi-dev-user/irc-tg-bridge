@@ -83,6 +83,7 @@
   "nickserv.register_prompt": "שלח סיסמה (ואם תרצה, גם כתובת אימייל) כדי לרשום את הכינוי הנוכחי שלך אצל NickServ.",
   "nickserv.registered": "בקשת הרישום נשלחה ל-NickServ. עיין בחלון השרת כדי לראות את התשובה.",
   "perform.prompt": "שלח פקודה אחת שתופעל בעת ההתחברות (למשל /msg NickServ IDENTIFY הסיסמה_שלך). היא תחליף את הקיימת.",
+  "perform.current": "מוגדר כרגע: {cmd}",
   "perform.saved": "פקודת ההתחברות נשמרה.",
   "ignores.title": "כינויים בהתעלמות",
   "ignores.add_prompt": "שלח כינוי להתעלמות. הודעות ואירועים ממנו יושמטו.",

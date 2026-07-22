@@ -264,6 +264,18 @@ def test_perform_action_prompts_and_sets_pending():
     assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
 
 
+def test_perform_prompt_shows_the_current_command():
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    db.set_perform("libera", "/msg NickServ IDENTIFY secret")
+    text, _m = run(mgr.on_callback(ADMIN, "srv:perform:libera"))
+    assert "/msg NickServ IDENTIFY secret" in text   # editing is not blind
+    # a server with nothing set shows only the plain prompt, no "currently" line
+    db.upsert_server("oftc")
+    text2, _m2 = run(mgr.on_callback(ADMIN, "srv:perform:oftc"))
+    assert "Currently set" not in text2
+
+
 def test_perform_flow_stores_text():
     mgr, db, gw, be = make()
     db.upsert_server("libera")

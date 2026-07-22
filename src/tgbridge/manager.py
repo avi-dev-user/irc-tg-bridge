@@ -383,7 +383,13 @@ class Manager:
         if action == "perform":
             self._pending = ("perform", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("perform.prompt"), cancel)
+            current = self._db.get_perform(name)
+            prompt = self._tr("perform.prompt")
+            if current:
+                # show what is set now so the user is not editing blind (it may
+                # hold a password, but this is the admin's own private console).
+                prompt = f"{self._tr('perform.current', cmd=current)}\n\n{prompt}"
+            return (prompt, cancel)
         if action == "ignoreadd":
             self._pending = ("ignore", name)
             cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]

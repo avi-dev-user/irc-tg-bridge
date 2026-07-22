@@ -83,6 +83,7 @@
   "nickserv.register_prompt": "Send a password (and optionally an email) to register your current nick with NickServ.",
   "nickserv.registered": "Registration sent to NickServ. Check the server buffer for its reply.",
   "perform.prompt": "Send one command to run on connect (for example /msg NickServ IDENTIFY yourpassword). It replaces the current one.",
+  "perform.current": "Currently set: {cmd}",
   "perform.saved": "On-connect command saved.",
   "ignores.title": "Ignored nicks",
   "ignores.add_prompt": "Send a nick to ignore. Messages and events from it will be dropped.",

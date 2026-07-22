@@ -414,6 +414,58 @@ def test_telegram_to_irc_failure_marked():
     assert (9, "👎") in gw.reactions
 
 
+def test_multiline_command_runs_each_line():
+    # a pasted block of commands (one per line) must all run, not just the first.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.set_mapping("irc.lt.#weechat", 42, "primary")
+    r = Router(db, gw, irc)
+    run(r.handle_telegram(42, 9, "/nick newnick\n/msg NickServ REGISTER pw mail"))
+    assert ("irc.lt.#weechat", "/nick newnick") in irc.commands
+    assert ("irc.lt.#weechat", "/msg NickServ REGISTER pw mail") in irc.commands
+
+
+def test_chathistory_unknown_command_is_suppressed():
+    # our internal CHATHISTORY probe errors on a server without it; do not show it.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    r = Router(db, gw, irc)
+
+    async def go():
+        await r.handle_irc(IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                                    text="CHATHISTORY :Unknown command", numeric=421))
+        await r.flush()
+    run(go())
+    assert gw.sent == []
+
+
+def test_real_unknown_command_is_still_shown():
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    r = Router(db, gw, irc)
+
+    async def go():
+        await r.handle_irc(IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                                    text="FROBNICATE :Unknown command", numeric=421))
+        await r.flush()
+    run(go())
+    assert gw.sent != []   # a genuine unknown command is surfaced to the user
+
+
+def test_notice_burst_is_coalesced_into_one_message():
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.set_mapping("irc.lt.NickServ", 30, "primary")
+    r = Router(db, gw, irc)
+
+    async def go():
+        for line in ("line one", "line two", "line three"):
+            await r.handle_irc(chan_msg(buffer="irc.lt.NickServ", conversation="NickServ",
+                                        is_private=True, is_notice=True,
+                                        nick="NickServ", text=line))
+        await r.flush()
+    run(go())
+    assert len(gw.sent) == 1   # a service burst is one message, not three
+    body = gw.sent[0][1]
+    assert "line one" in body and "line two" in body and "line three" in body
+
+
 def test_command_reply_routed_to_origin_topic():
     gw, irc, db = FakeGateway(), FakeIrc(), _db()
     db.set_mapping("irc.lt.#weechat", 42, "primary")
