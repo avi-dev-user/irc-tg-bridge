@@ -869,6 +869,8 @@ class Manager:
             await self._backend.send_command(CORE_BUFFER, f"/set irc.server.{name}.proxy tor")
         else:
             await self._backend.send_command(CORE_BUFFER, f"/unset irc.server.{name}.proxy")
+        # Persist the proxy change so it survives a WeeChat restart.
+        await self._backend.send_command(CORE_BUFFER, "/save")
         self._db.upsert_server(
             name, tor=new_tor, anon=bool(srv.get("anon")),
             tls=bool(srv.get("tls")),

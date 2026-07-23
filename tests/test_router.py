@@ -548,6 +548,49 @@ def test_welcome_numeric_marks_connected_and_fires_callback():
     assert seen == [("lt", "connected")]
 
 
+def test_rpl_loggedin_rejoins_channels_after_login():
+    # +r channels refuse a join until we are logged in; a perform NickServ
+    # IDENTIFY completes only after welcome, so the 900 (RPL_LOGGEDIN) must retry
+    # the joins that failed while we were still anonymous.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("lt")
+    db.set_mapping("irc.lt.##secure", 40, "primary")
+    r = Router(db, gw, irc)
+    emit_flush(r, IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                           text="Welcome", numeric=1))
+    irc.commands.clear()
+    emit_flush(r, IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                           text="You are now logged in", numeric=900))
+    assert ("irc.server.lt", "/join ##secure") in irc.commands
+
+
+def test_rpl_loggedin_rejoins_only_once_per_connect():
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("lt")
+    db.set_mapping("irc.lt.##secure", 40, "primary")
+    r = Router(db, gw, irc)
+    emit_flush(r, IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                           text="Welcome", numeric=1))
+    irc.commands.clear()
+    for _ in range(2):
+        emit_flush(r, IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                               text="logged in", numeric=900))
+    joins = [c for c in irc.commands if c == ("irc.server.lt", "/join ##secure")]
+    assert len(joins) == 1   # a repeat 900 in the same session is a no-op
+
+
+def test_rpl_loggedin_before_welcome_does_not_rejoin():
+    # SASL logs in before welcome (status not connected yet); the welcome autojoin
+    # then already sees us logged in, so the 900 must not fire a premature join.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("lt")
+    db.set_mapping("irc.lt.##secure", 40, "primary")
+    r = Router(db, gw, irc)
+    emit_flush(r, IrcEvent(server="lt", buffer="irc.server.lt", kind="server",
+                           text="logged in", numeric=900))
+    assert ("irc.server.lt", "/join ##secure") not in irc.commands
+
+
 def test_non_welcome_server_line_does_not_mark_connected():
     gw, irc, db = FakeGateway(), FakeIrc(), _db()
     db.upsert_server("lt")

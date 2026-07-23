@@ -276,6 +276,9 @@ class Router:
         # connect starts; if welcome does not arrive in time, report it failed.
         self._connect_tasks: dict[str, object] = {}
         self._connect_timeout = 45.0
+        # Servers whose channels we already re-joined after login (RPL_LOGGEDIN),
+        # so a repeat 900 in the same session does not re-issue every join.
+        self._relogin_joined: set[str] = set()
         # WeeChat's /LIST buffer streams rows with no RPL_LISTEND, so completion
         # is a debounce: each row restarts a short timer, and the collected list is
         # flushed to the picker once the rows stop arriving.
@@ -379,10 +382,20 @@ class Router:
             line = line.strip()
             if line:
                 await self._irc.send_command(server_buf, line)
-        if srv.get("autojoin", 1):
-            for ch in self._db.list_channels(server):
-                channel = ch["buffer"].split(".", 2)[-1]
-                await self._irc.send_command(server_buf, f"/join {channel}")
+        await self._rejoin_channels(server)
+
+    async def _rejoin_channels(self, server: str) -> None:
+        """(Re)join the channels we hold topics for. Safe to call more than once:
+        WeeChat ignores a join for a channel we are already in. It runs on connect
+        and again once we are logged in (RPL_LOGGEDIN), so a +r channel that
+        refused us before the perform identify completed finally lets us in."""
+        srv = self._db.get_server(server) or {}
+        if not srv.get("autojoin", 1):
+            return
+        server_buf = f"irc.server.{server}"
+        for ch in self._db.list_channels(server):
+            channel = ch["buffer"].split(".", 2)[-1]
+            await self._irc.send_command(server_buf, f"/join {channel}")
 
     @staticmethod
     def _server_title(server: str) -> str:
@@ -551,7 +564,20 @@ class Router:
                 if self._on_server_status is not None:
                     await self._on_server_status(e.server, "connected")
                 if not was_connected:
+                    self._relogin_joined.discard(e.server)   # arm the post-login rejoin
                     await self._perform_on_connect(e.server)
+            elif e.numeric == 900:
+                # RPL_LOGGEDIN. With a post-connect identify (a perform NickServ
+                # IDENTIFY) this arrives after RPL_WELCOME, so the autojoin already
+                # ran and any +r channel refused us; retry the joins now we are
+                # logged in. With SASL it arrives before welcome (not connected
+                # yet), where the welcome autojoin already sees us logged in, so
+                # skip. Once per connection, so a repeat 900 does not re-spam.
+                connected = (self._db.get_server(e.server) or {}
+                             ).get("status") == "connected"
+                if connected and e.server not in self._relogin_joined:
+                    self._relogin_joined.add(e.server)
+                    await self._rejoin_channels(e.server)
             if not self._show_event(e):
                 return
             origin = self._cmd_origin.get(e.server)

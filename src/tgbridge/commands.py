@@ -147,6 +147,12 @@ def build_addserver_commands(d: dict) -> list[str]:
         f"/server add {name} {host}/{port}{tls_flag}",
         f"/set irc.server.{name}.nicks {nick}",
     ]
+    if d.get("tls") and host.endswith(".onion"):
+        # A .onion address can never match the server's TLS certificate name, so
+        # the hostname check always fails. The onion address is itself the
+        # server's cryptographic identity (Tor guarantees the right peer), so the
+        # cert-name check is redundant here; turn it off or the handshake fails.
+        cmds.append(f"/set irc.server.{name}.tls_verify off")
     if use_tor:
         # The server references a proxy named "tor"; create it first or the
         # connection fails with "proxy tor not found".
@@ -165,6 +171,11 @@ def build_addserver_commands(d: dict) -> list[str]:
     if use_tor:
         cmds.append(f"/set irc.server.{name}.proxy tor")
     cmds.append(f"/connect {name}")
+    # Persist the new server to disk. WeeChat keeps a runtime-added server in
+    # memory only; without this it is lost on the next WeeChat restart (an auto
+    # update, a reboot), and the bridge cannot recreate it since it does not
+    # store the host/port itself.
+    cmds.append("/save")
     return cmds
 
 

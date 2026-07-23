@@ -61,7 +61,10 @@ def test_build_commands_sasl_uses_secured_data():
     assert "/server add libera irc.libera.chat/6697 -tls" == cmds[0]
     assert "/secure set libera_pass pw" in cmds
     assert '/set irc.server.libera.sasl_password "${sec.data.libera_pass}"' in cmds
-    assert "/connect libera" == cmds[-1]
+    # /connect comes last before the persisting /save, and after the SASL setup
+    assert cmds[-2:] == ["/connect libera", "/save"]
+    assert cmds.index('/set irc.server.libera.sasl_password "${sec.data.libera_pass}"') \
+        < cmds.index("/connect libera")
     # the raw password never appears in a server option, only in secured data
     assert not any("sasl_password pw" in c for c in cmds)
 
@@ -96,6 +99,34 @@ def test_build_commands_anon_sets_proxy():
     assert "/proxy add tor socks5 127.0.0.1 9050" in cmds
     assert cmds.index("/proxy add tor socks5 127.0.0.1 9050") \
         < cmds.index("/set irc.server.onionnet.proxy tor")
+
+
+def test_build_commands_persist_with_save():
+    # a runtime-added server is memory-only until saved; without /save it is lost
+    # on the next WeeChat restart and cannot be recreated (no host/port stored).
+    cmds = build_addserver_commands({
+        "name": "libera", "host": "irc.libera.chat", "port": 6697,
+        "tls": True, "nick": "me", "auth": "none", "privacy": "off",
+    })
+    assert cmds[-1] == "/save"
+
+
+def test_build_commands_onion_disables_tls_verify():
+    # a .onion never matches the server's TLS cert name, so the hostname check
+    # would fail the handshake; the onion address is the identity, so verify off.
+    cmds = build_addserver_commands({
+        "name": "onionnet", "host": "abc.onion", "port": 6697,
+        "tls": True, "nick": "me", "auth": "none", "privacy": "anon",
+    })
+    assert "/set irc.server.onionnet.tls_verify off" in cmds
+
+
+def test_build_commands_no_tls_verify_change_for_clearnet():
+    cmds = build_addserver_commands({
+        "name": "libera", "host": "irc.libera.chat", "port": 6697,
+        "tls": True, "nick": "me", "auth": "none", "privacy": "off",
+    })
+    assert not any("tls_verify" in c for c in cmds)
 
 
 def test_build_commands_tor_privacy_sets_proxy():
