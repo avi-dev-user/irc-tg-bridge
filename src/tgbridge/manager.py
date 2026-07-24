@@ -459,7 +459,9 @@ class Manager:
         """Manage a server's on-connect commands: each command listed and
         numbered (secrets masked), with add/remove/back below."""
         lines = [ln for ln in self._db.get_perform(name).splitlines() if ln.strip()]
-        body = "\n".join(f"{i + 1}. <code>{_escape(menu.mask_secret(ln))}</code>"
+        # shown in full (secrets included): this console is admin-only and the
+        # point is to see exactly what runs on connect.
+        body = "\n".join(f"{i + 1}. <code>{_escape(ln)}</code>"
                          for i, ln in enumerate(lines)) or self._tr("perform.empty")
         title = self._tr("perform.title", server=name)
         return (f"{title}\n\n{body}",

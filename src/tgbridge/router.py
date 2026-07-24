@@ -555,17 +555,19 @@ class Router:
         if e.kind == "server" or e.buffer.startswith("irc.server."):
             if e.numeric == 1:   # RPL_WELCOME: the server accepted us
                 self._cancel_connect_timeout(e.server)
-                # Only run the on-connect setup on a fresh connect. A network
-                # can send more than one 001 in a session; re-running the joins
-                # and perform each time would spam the server.
-                was_connected = (self._db.get_server(e.server) or {}
-                                 ).get("status") == "connected"
                 self._db.set_server_status(e.server, "connected")
                 if self._on_server_status is not None:
                     await self._on_server_status(e.server, "connected")
-                if not was_connected:
-                    self._relogin_joined.discard(e.server)   # arm the post-login rejoin
-                    await self._perform_on_connect(e.server)
+                # Run the on-connect setup on EVERY welcome, not only a "fresh"
+                # one. 001 means a (re)connect completed, so we must re-identify
+                # and re-join; the commands are idempotent (NickServ replies
+                # "already identified", an already-joined channel ignores /join),
+                # so a rare duplicate 001 is harmless. The old status guard wrongly
+                # skipped this on a reconnect whose stored status was still
+                # "connected" (e.g. after a WeeChat restart), leaving us
+                # unidentified - renamed to Guest - and out of the +r/+i channels.
+                self._relogin_joined.discard(e.server)   # arm the post-login rejoin
+                await self._perform_on_connect(e.server)
             elif e.numeric == 900:
                 # RPL_LOGGEDIN. With a post-connect identify (a perform NickServ
                 # IDENTIFY) this arrives after RPL_WELCOME, so the autojoin already

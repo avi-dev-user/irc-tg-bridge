@@ -300,18 +300,6 @@ def ignores_menu(t, server: str, nicks: list[str], gen: int) -> Menu:
     return rows
 
 
-def mask_secret(line: str) -> str:
-    """Hide the credential in a command for display: the last token of a line
-    that carries one (identify/register/invite/a password) becomes dots, so a
-    NickServ password or an invite key does not sit in plain view on screen."""
-    low = line.lower()
-    if any(k in low for k in ("identify", "register", "invite", "pass", "login")):
-        head, sep, tail = line.rpartition(" ")
-        if sep and tail:
-            return f"{head} ••••"
-    return line
-
-
 def perform_menu(t, server: str, count: int) -> Menu:
     """Manage a server's on-connect commands: one Remove button per command
     (by index, never by content, so a long command cannot blow the 64-byte

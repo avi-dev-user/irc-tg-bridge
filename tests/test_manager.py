@@ -352,13 +352,13 @@ def test_perform_action_opens_management_view():
     assert any(M.parse_cb(d) == ("srv", "settings", "libera") for _, d in flat)  # Back
 
 
-def test_perform_view_lists_and_masks_secrets():
+def test_perform_view_lists_commands_in_full():
     mgr, db, gw, be = make()
     db.upsert_server("libera")
     db.set_perform("libera", "/msg NickServ IDENTIFY secret")
     text, _m = run(mgr.on_callback(ADMIN, "srv:perform:libera"))
-    assert "NickServ IDENTIFY" in text           # the command is shown
-    assert "secret" not in text and "••••" in text   # the password is masked
+    # shown in full (admin-only console): the whole command, secret included
+    assert "/msg NickServ IDENTIFY secret" in text
     # an empty server lists no commands
     db.upsert_server("oftc")
     text2, _m2 = run(mgr.on_callback(ADMIN, "srv:perform:oftc"))

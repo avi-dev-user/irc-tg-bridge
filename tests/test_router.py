@@ -1330,19 +1330,22 @@ def test_welcome_no_perform_no_channels_issues_nothing():
     assert irc.commands == []
 
 
-def test_second_welcome_while_connected_does_not_rerun_setup():
-    # a network can send more than one 001; the joins/perform run once per
-    # connect, not on every welcome line.
+def test_every_welcome_reruns_setup():
+    # 001 marks a completed (re)connect, so the perform + rejoins run on EVERY
+    # welcome, not once per "session". They are idempotent (NickServ says already
+    # identified, joins we hold are ignored), and re-running is what keeps us
+    # identified - not renamed to Guest - after a reconnect whose stored status
+    # was still "connected".
     gw, irc, db = FakeGateway(), FakeIrc(), _db()
     db.upsert_server("lt")
     db.set_perform("lt", "/mode +x")
     db.set_mapping("irc.lt.#weechat", 2, "primary")
     r = Router(db, gw, irc)
+    setup = [("irc.server.lt", "/mode +x"), ("irc.server.lt", "/join #weechat")]
     emit_flush(r, _welcome())
-    first = list(irc.commands)
-    assert first == [("irc.server.lt", "/mode +x"), ("irc.server.lt", "/join #weechat")]
-    emit_flush(r, _welcome())       # already connected now
-    assert irc.commands == first    # nothing new issued
+    assert irc.commands == setup
+    emit_flush(r, _welcome())       # a second welcome re-runs the setup
+    assert irc.commands == setup + setup
 
 
 def test_reconnect_reruns_setup():
