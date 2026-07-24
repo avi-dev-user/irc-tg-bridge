@@ -543,7 +543,7 @@ def test_reconnect_and_remove_callbacks():
     # Confirming (remove2) actually deletes.
     run(mgr.on_callback(ADMIN, "srv:remove2:libera"))
     cmds = [c for _, c in be.commands]
-    assert "/connect libera" in cmds
+    assert "/reconnect libera" in cmds   # reconnect forces a fresh connection
     assert "/server del libera" in cmds
     assert db.get_server("libera") is None
 

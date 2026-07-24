@@ -513,7 +513,12 @@ class Manager:
         if action == "reconnect":
             self._db.set_server_status(name, "connecting")
             self._arm_connect(name)
-            await self._backend.send_command(CORE_BUFFER, f"/connect {name}")
+            # /reconnect, not /connect: /connect is a no-op on an already-
+            # connected server (no fresh 001), so the status would sit on
+            # "connecting" until the timeout and the on-connect setup (identify,
+            # invites) would never re-run. /reconnect forces a real drop and
+            # reconnect, giving the fresh welcome that re-identifies and rejoins.
+            await self._backend.send_command(CORE_BUFFER, f"/reconnect {name}")
         elif action == "reconnect_all":
             # Leave an already-connected server alone: it is up, so it should not
             # flip to "connecting" and sit under a failure timeout that could
