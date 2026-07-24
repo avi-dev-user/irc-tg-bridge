@@ -34,6 +34,10 @@ def _split_index(arg: str) -> tuple[int, int]:
     return -1, -1
 
 
+def _escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class Manager:
     def __init__(self, db, backend, gateway, translator, router, *, admin_id: int,
                  on_group_set=None):
@@ -143,11 +147,22 @@ class Manager:
                 await self._backend.send_command(f"irc.server.{server}", register)
                 await self._gw.delete_message(message_id)
                 await self._finish_prompt(self._tr("nickserv.registered"))
-            elif action == "perform":
-                # Store the on-connect commands, one per line; this replaces the
-                # whole set (see Database.set_perform).
-                self._db.set_perform(server, text.strip())
-                await self._finish_prompt(self._tr("perform.saved"))
+            elif action == "permadd":
+                # Append one on-connect command to the list, then show the
+                # updated manager in place (not a plain "saved" line) so the new
+                # command is visible and can be removed right away.
+                cmd = text.strip()
+                if cmd:
+                    current = self._db.get_perform(server)
+                    self._db.set_perform(
+                        server, f"{current}\n{cmd}" if current else cmd)
+                title, m = self._perform_view(server)
+                if self._prompt_msg_id:
+                    await self._gw.edit_menu(self._prompt_msg_id, title, m)
+                else:
+                    await self._gw.send_menu(title, m)
+                self._prompt_msg_id = 0
+                self._prompt_back = ""
             elif action == "ignore":
                 nick = text.strip()
                 if nick:
@@ -433,6 +448,29 @@ class Manager:
             return None
         return None
 
+    def _prompt_back_row(self):
+        """A single Back button for a text prompt, returning to wherever it was
+        opened from. Tapping it also drops the pending prompt (any non-flow
+        callback does), so the flow is abandoned cleanly instead of the next
+        typed line being read as the answer."""
+        return [[(self._tr("menu.back"), self._prompt_back or menu.cb("nav", "main"))]]
+
+    def _perform_view(self, name: str):
+        """Manage a server's on-connect commands: each command listed and
+        numbered (secrets masked), with add/remove/back below."""
+        lines = [ln for ln in self._db.get_perform(name).splitlines() if ln.strip()]
+        body = "\n".join(f"{i + 1}. <code>{_escape(menu.mask_secret(ln))}</code>"
+                         for i, ln in enumerate(lines)) or self._tr("perform.empty")
+        title = self._tr("perform.title", server=name)
+        return (f"{title}\n\n{body}",
+                menu.perform_menu(self._bound(), name, len(lines)))
+
+    def _perform_remove(self, name: str, idx: str) -> None:
+        lines = [ln for ln in self._db.get_perform(name).splitlines() if ln.strip()]
+        if idx.isdigit() and 0 <= int(idx) < len(lines):
+            del lines[int(idx)]
+            self._db.set_perform(name, "\n".join(lines))
+
     async def _server_action(self, action: str, name: str):
         if action == "add":
             self._addflow = AddServerFlow()
@@ -442,42 +480,34 @@ class Manager:
         if action == "join":
             self._pending = ("join", name)
             self._prompt_back = menu.cb("srv", "view", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("channels.join_prompt"), cancel)
+            return (self._tr("channels.join_prompt"), self._prompt_back_row())
         if action == "identify":
             self._pending = ("identify", name)
             self._prompt_back = menu.cb("srv", "settings", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("nickserv.prompt"), cancel)
+            return (self._tr("nickserv.prompt"), self._prompt_back_row())
         if action == "register":
             self._pending = ("register", name)
             self._prompt_back = menu.cb("srv", "settings", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("nickserv.register_prompt"), cancel)
+            return (self._tr("nickserv.register_prompt"), self._prompt_back_row())
         if action == "perform":
-            self._pending = ("perform", name)
-            self._prompt_back = menu.cb("srv", "settings", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            current = self._db.get_perform(name)
-            prompt = self._tr("perform.prompt")
-            if current:
-                # show what is set now (monospace) so the user is not editing
-                # blind; it may hold a password, but this is the admin's own console.
-                safe = (current.replace("&", "&amp;").replace("<", "&lt;")
-                        .replace(">", "&gt;"))
-                prompt = (f"{self._tr('perform.current', cmd=f'<code>{safe}</code>')}"
-                          f"\n\n{prompt}")
-            return (prompt, cancel)
+            return self._perform_view(name)
+        if action == "permadd":
+            self._pending = ("permadd", name)
+            self._prompt_back = menu.cb("srv", "perform", name)
+            return (self._tr("perform.add_prompt"), self._prompt_back_row())
+        if action == "permdel":
+            # arg is "<server>.<index>"; the index addresses one command line
+            srv, _, idx = name.rpartition(".")
+            self._perform_remove(srv, idx)
+            return self._perform_view(srv)
         if action == "ignoreadd":
             self._pending = ("ignore", name)
             self._prompt_back = menu.cb("srv", "ignores", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("ignores.add_prompt"), cancel)
+            return (self._tr("ignores.add_prompt"), self._prompt_back_row())
         if action == "nick":
             self._pending = ("nick", name)
             self._prompt_back = menu.cb("srv", "view", name)
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("nick.prompt"), cancel)
+            return (self._tr("nick.prompt"), self._prompt_back_row())
         if action == "reconnect":
             self._db.set_server_status(name, "connecting")
             self._arm_connect(name)
@@ -896,8 +926,7 @@ class Manager:
         elif action == "senderadd":
             self._pending = ("addsender", "")
             self._prompt_back = menu.cb("nav", "senders")
-            cancel = [[(self._tr("menu.cancel"), menu.cb("flow", "cancel"))]]
-            return (self._tr("senders.add_prompt"), cancel)
+            return (self._tr("senders.add_prompt"), self._prompt_back_row())
         elif action == "senderdel":
             return self._delete_sender(arg)
         return self._nav_view("settings")

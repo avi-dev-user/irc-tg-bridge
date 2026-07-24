@@ -223,7 +223,7 @@ def test_join_action_prompts_with_cancel_and_sets_pending():
     # a real prompt is shown (not the raw key), with a cancel button
     assert text and text != "channels.join_prompt"
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "view", "libera") for _, d in flat)  # Back
 
 
 def test_answering_a_prompt_edits_it_in_place_with_a_back_button():
@@ -264,7 +264,7 @@ def test_identify_action_prompts_and_sets_pending():
     # a real prompt is shown, not the raw key, with a cancel button
     assert text and text != "nickserv.prompt"
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "settings", "libera") for _, d in flat)  # Back
 
 
 def test_identify_sends_command_on_server_buffer_and_scrubs_password():
@@ -300,7 +300,7 @@ def test_register_action_prompts_and_sets_pending():
     # a real prompt is shown, not the raw key, with a cancel button
     assert text and text != "nickserv.register_prompt"
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "settings", "libera") for _, d in flat)  # Back
 
 
 def test_register_sends_command_without_email_and_scrubs_password():
@@ -338,48 +338,61 @@ def test_register_cancel_clears_pending():
     assert 88 not in gw.deleted
 
 
-def test_perform_action_prompts_and_sets_pending():
+def test_perform_action_opens_management_view():
     from tgbridge import menu as M
     mgr, db, gw, be = make()
     db.upsert_server("libera")
+    db.set_perform("libera", "/msg NickServ IDENTIFY pw\n/msg HeBoT !invite KEY")
     text, m = run(mgr.on_callback(ADMIN, "srv:perform:libera"))
-    assert mgr._pending == ("perform", "libera")
-    # a real prompt is shown (not the raw key), with a cancel button
-    assert text and text != "perform.prompt"
+    assert mgr._pending is None                 # a view, not a prompt
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "permadd", "libera") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "permdel", "libera.0") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "permdel", "libera.1") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "settings", "libera") for _, d in flat)  # Back
 
 
-def test_perform_prompt_shows_the_current_command():
+def test_perform_view_lists_and_masks_secrets():
     mgr, db, gw, be = make()
     db.upsert_server("libera")
     db.set_perform("libera", "/msg NickServ IDENTIFY secret")
     text, _m = run(mgr.on_callback(ADMIN, "srv:perform:libera"))
-    assert "/msg NickServ IDENTIFY secret" in text   # editing is not blind
-    # a server with nothing set shows only the plain prompt, no "currently" line
+    assert "NickServ IDENTIFY" in text           # the command is shown
+    assert "secret" not in text and "••••" in text   # the password is masked
+    # an empty server lists no commands
     db.upsert_server("oftc")
     text2, _m2 = run(mgr.on_callback(ADMIN, "srv:perform:oftc"))
-    assert "Currently set" not in text2
+    assert "1." not in text2
 
 
-def test_perform_flow_stores_text():
+def test_permadd_appends_a_command():
     mgr, db, gw, be = make()
     db.upsert_server("libera")
-    run(mgr.on_callback(ADMIN, "srv:perform:libera"))
+    db.set_perform("libera", "/msg NickServ IDENTIFY pw")
+    run(mgr.on_callback(ADMIN, "srv:permadd:libera"))
+    assert mgr._pending == ("permadd", "libera")
     run(mgr.on_console_text(ADMIN, 33, "/msg InviteBot !invite KEY"))
-    assert db.get_perform("libera") == "/msg InviteBot !invite KEY"
-    assert mgr._pending is None                 # pending consumed after one answer
-    assert gw.console                           # a saved-confirmation was shown
-    assert 33 not in gw.deleted                 # a perform command is not a secret
+    assert db.get_perform("libera") == "/msg NickServ IDENTIFY pw\n/msg InviteBot !invite KEY"
+    assert mgr._pending is None
+    assert 33 not in gw.deleted                 # a perform command is not scrubbed
 
 
-def test_perform_cancel_clears_pending():
+def test_permdel_removes_one_command_by_index():
     mgr, db, gw, be = make()
     db.upsert_server("libera")
+    db.set_perform("libera", "/msg a\n/msg b\n/msg c")
+    run(mgr.on_callback(ADMIN, "srv:permdel:libera.1"))   # remove the middle
+    assert db.get_perform("libera") == "/msg a\n/msg c"
+
+
+def test_permadd_back_clears_pending():
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    run(mgr.on_callback(ADMIN, "srv:permadd:libera"))
+    assert mgr._pending == ("permadd", "libera")
+    # tapping the Back button (any non-flow callback) drops the pending prompt
     run(mgr.on_callback(ADMIN, "srv:perform:libera"))
-    run(mgr.on_callback(ADMIN, "flow:cancel"))
     assert mgr._pending is None
-    # a later message is not misread as a perform command to store
     run(mgr.on_console_text(ADMIN, 44, "just chatting"))
     assert db.get_perform("libera") == ""
 
@@ -451,7 +464,7 @@ def test_nick_action_prompts_and_sets_pending():
     assert mgr._pending == ("nick", "libera")
     assert text and text != "nick.prompt"
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "view", "libera") for _, d in flat)  # Back
 
 
 def test_nick_flow_sends_nick_for_valid_value():
@@ -1254,7 +1267,7 @@ def test_ignoreadd_prompts_and_sets_pending():
     # a real prompt is shown (not the raw key), with a cancel button
     assert text and text != "ignores.add_prompt"
     flat = [b for row in m for b in row]
-    assert any(M.parse_cb(d) == ("flow", "cancel", "") for _, d in flat)
+    assert any(M.parse_cb(d) == ("srv", "ignores", "libera") for _, d in flat)  # Back
 
 
 def test_ignore_flow_adds_to_db():
