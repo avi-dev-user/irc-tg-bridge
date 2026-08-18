@@ -179,6 +179,17 @@ async def run() -> None:
                     # Never let recovery keep the bridge from streaming; the
                     # servers can also be connected from the menu.
                     print(f"[main] could not bring servers up: {exc}")
+                try:
+                    # The servers WeeChat brought up before we were listening
+                    # never delivered us their welcome, so their on-connect setup
+                    # (identify, invites, rejoins) has not run. It is idempotent.
+                    resynced = await router.resync_connected(
+                        backend.connected_servers())
+                    if resynced:
+                        print("[main] on-connect setup replayed for: "
+                              f"{', '.join(resynced)}")
+                except Exception as exc:
+                    print(f"[main] could not replay on-connect setup: {exc}")
                 await consume()
             except Exception as exc:
                 print(f"[relay] stream error: {exc}")
