@@ -6,10 +6,16 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Optional secrets (leading '-': missing file is not an error). Holds
-# WEECHAT_PASSPHRASE once IRC servers with saved passwords exist.
+# SECURE_PASSPHRASE, which unlocks WeeChat's encrypted secured data.
 EnvironmentFile=-/etc/irc-tg-bridge/env
-Environment=WEECHAT_PASSPHRASE=${SECURE_PASSPHRASE}
-ExecStart=/usr/bin/weechat-headless --dir /var/lib/irc-tg-bridge/weechat
+# systemd does NOT expand variables in Environment=, so the old
+# `Environment=WEECHAT_PASSPHRASE=${SECURE_PASSPHRASE}` handed WeeChat the
+# literal string. It round-trips (the data gets encrypted under that same
+# literal) and so hides the bug until someone edits either file. A shell does
+# the expansion instead. Migrating an install that ran the old line: before
+# switching, run `/secure passphrase <the real SECURE_PASSPHRASE>` in the
+# running WeeChat to re-encrypt sec.conf, or it can no longer be decrypted.
+ExecStart=/bin/sh -c 'WEECHAT_PASSPHRASE="$SECURE_PASSPHRASE" exec /usr/bin/weechat-headless --dir /var/lib/irc-tg-bridge/weechat'
 Restart=always
 RestartSec=5
 
