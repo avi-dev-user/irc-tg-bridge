@@ -411,3 +411,21 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def test_server_view_offers_connect_when_disconnected():
+    # "Reconnect" on a down server reads as "nothing to do here"; the one button
+    # that brings it up has to say Connect.
+    t = bound()
+    m = menu.server_view_menu(t, {"name": "fuzer", "status": "disconnected"})
+    labels = [label for row in m for label, _cb in row]
+    assert t("menu.connect") in labels
+    assert t("menu.reconnect") not in labels
+
+
+def test_server_view_offers_reconnect_when_connected():
+    t = bound()
+    m = menu.server_view_menu(t, {"name": "fuzer", "status": "connected"})
+    labels = [label for row in m for label, _cb in row]
+    assert t("menu.reconnect") in labels
+    assert t("menu.connect") not in labels

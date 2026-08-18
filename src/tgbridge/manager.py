@@ -25,6 +25,12 @@ CORE_BUFFER = "core.weechat"
 # so without this the message would hang forever.
 DISCOVER_TIMEOUT = 12.0
 
+# How long the console waits for NickServ to answer a register/identify before it
+# says nothing came back. Services normally reply within a second; silence means
+# the command was never delivered (a dropped server), which the old "request
+# sent" message hid completely.
+NICKSERV_REPLY_TIMEOUT = 20.0
+
 
 def _split_index(arg: str) -> tuple[int, int]:
     """Decode a "gen.index" picker argument. Returns (-1, -1) when malformed,
@@ -76,6 +82,8 @@ class Manager:
         self._discover_msg: dict[str, int] = {}
         self._discover_tasks: dict[str, object] = {}
         self._discover_timeout = DISCOVER_TIMEOUT
+        # server -> (prompt message id, timeout task) awaiting a NickServ reply
+        self._ns_wait: dict = {}
         # The ignore list currently shown, so an "unignore" tap resolves its
         # index arg back to a nick without packing the nick into callback_data.
         self._ignore_list: Optional[dict] = None
@@ -134,7 +142,9 @@ class Manager:
                 await self._backend.send_command(
                     f"irc.server.{server}", f"/msg NickServ IDENTIFY {text.strip()}")
                 await self._gw.delete_message(message_id)
-                await self._finish_prompt(self._tr("nickserv.identified"))
+                prompt_id = self._prompt_msg_id
+                await self._finish_prompt(self._tr("nickserv.waiting"))
+                self._await_nickserv(server, prompt_id)
             elif action == "register":
                 # Register the current nick with NickServ. The first token is the
                 # password, an optional second token is a contact email. Scrub the
@@ -147,7 +157,9 @@ class Manager:
                     register += f" {email}"
                 await self._backend.send_command(f"irc.server.{server}", register)
                 await self._gw.delete_message(message_id)
-                await self._finish_prompt(self._tr("nickserv.registered"))
+                prompt_id = self._prompt_msg_id
+                await self._finish_prompt(self._tr("nickserv.waiting"))
+                self._await_nickserv(server, prompt_id)
             elif action == "permadd":
                 # Append one on-connect command to the list, then show the
                 # updated manager in place (not a plain "saved" line) so the new
@@ -304,6 +316,44 @@ class Manager:
             self._tr("addserver.connecting", name=data["name"], nick=data["nick"]),
             None)
         self._flow_msg_id = None
+
+    def _await_nickserv(self, server: str, message_id: int) -> None:
+        """Wait for the NickServ reply and show it in place of the prompt. Needs a
+        message to edit; without one (a console-only prompt) the reply still
+        reaches the server topic as usual."""
+        if not message_id:
+            return
+        self._cancel_nickserv_wait(server)
+        self._ns_wait[server] = (
+            message_id, asyncio.create_task(self._nickserv_timeout_later(server)))
+
+    def _cancel_nickserv_wait(self, server: str) -> None:
+        entry = self._ns_wait.pop(server, None)
+        if entry is not None:
+            entry[1].cancel()
+
+    async def _nickserv_timeout_later(self, server: str) -> None:
+        try:
+            await asyncio.sleep(NICKSERV_REPLY_TIMEOUT)
+        except asyncio.CancelledError:
+            return
+        entry = self._ns_wait.pop(server, None)
+        if entry is None:
+            return
+        await self._gw.edit_menu(entry[0], self._tr("nickserv.no_reply"),
+                                 [[(self._tr("menu.back"),
+                                    menu.cb("srv", "settings", server))]])
+
+    async def on_service_reply(self, server: str, text: str) -> None:
+        """Router callback: NickServ said something. When a register/identify from
+        the console is waiting on this server, its prompt becomes the reply."""
+        entry = self._ns_wait.pop(server, None)
+        if entry is None:
+            return
+        entry[1].cancel()
+        await self._gw.edit_menu(entry[0], self._tr("nickserv.reply", text=text),
+                                 [[(self._tr("menu.back"),
+                                    menu.cb("srv", "settings", server))]])
 
     def _arm_connect(self, name: str) -> None:
         if self._router is not None:
@@ -540,6 +590,9 @@ class Manager:
             self._db.set_autoconnect(name, True)
             await self._backend.send_command(
                 CORE_BUFFER, f"/set irc.server.{name}.autoconnect on")
+            # Persist it: a runtime /set lives in memory only, so without this the
+            # value on disk stays whatever the last Disconnect saved.
+            await self._backend.send_command(CORE_BUFFER, "/save")
             self._arm_connect(name)
             # /reconnect, not /connect: /connect is a no-op on an already-
             # connected server (no fresh 001), so the status would sit on
@@ -556,7 +609,10 @@ class Manager:
                 if s.get("status") != "connected":
                     self._db.set_server_status(s["name"], "connecting")
                     self._db.set_autoconnect(s["name"], True)
+                    await self._backend.send_command(
+                        CORE_BUFFER, f"/set irc.server.{s['name']}.autoconnect on")
                     self._arm_connect(s["name"])
+            await self._backend.send_command(CORE_BUFFER, "/save")
             await self._backend.send_command(CORE_BUFFER, "/reconnect -all")
         elif action == "disconnect":
             self._db.set_server_status(name, "disconnected")
@@ -825,6 +881,8 @@ class Manager:
         """Cancel outstanding timers so they cannot fire after teardown."""
         for server in list(self._discover_tasks):
             self._cancel_discover_timeout(server)
+        for server in list(self._ns_wait):
+            self._cancel_nickserv_wait(server)
 
     async def on_channel_list(self, server: str, channels: list[dict]) -> None:
         """Router callback: a /list finished. Store the result and post a picker,

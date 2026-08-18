@@ -1596,3 +1596,61 @@ def test_disconnect_clears_autoconnect_and_reconnect_restores_it():
     run(mgr.on_callback(ADMIN, "srv:reconnect:libera"))
     assert db.get_server("libera")["autoconnect"] == 1
     assert (CORE_BUFFER, "/set irc.server.libera.autoconnect on") in be.commands
+
+
+def test_identify_shows_what_nickserv_answered():
+    # the old flow said "request sent" and pointed at the server topic, which
+    # reads as success even when the server had dropped and nothing was sent.
+    mgr, db, gw, be = make()
+    db.upsert_server("fuzer")
+    run(mgr.on_callback(ADMIN, "srv:identify:fuzer", 500))
+    run(mgr.on_console_text(ADMIN, 77, "hunter2"))
+    assert (("irc.server.fuzer", "/msg NickServ IDENTIFY hunter2")) in be.commands
+    assert 77 in gw.deleted                      # the password message is scrubbed
+    assert any(mgr._tr("nickserv.waiting") == title for _mid, title, _m in gw.edits)
+    run(mgr.on_service_reply("fuzer", "Password accepted - you are now recognized."))
+    assert "Password accepted" in gw.edits[-1][1]
+
+
+def test_nickserv_reply_for_another_server_is_ignored():
+    mgr, db, gw, be = make()
+    db.upsert_server("fuzer")
+    run(mgr.on_callback(ADMIN, "srv:identify:fuzer", 501))
+    run(mgr.on_console_text(ADMIN, 78, "pw"))
+    before = len(gw.edits)
+    run(mgr.on_service_reply("libera", "You are now identified for someone."))
+    assert len(gw.edits) == before            # nothing was waiting on libera
+
+
+def test_register_reports_silence_instead_of_claiming_success():
+    # NickServ never answers (the server had dropped, so nothing was delivered):
+    # the console must say so rather than leave "sent" standing as success.
+    from tgbridge import manager as manager_module
+    mgr, db, gw, be = make()
+    db.upsert_server("fuzer")
+    original = manager_module.NICKSERV_REPLY_TIMEOUT
+    manager_module.NICKSERV_REPLY_TIMEOUT = 0.01
+
+    async def drive():
+        await mgr.on_callback(ADMIN, "srv:register:fuzer", 502)
+        await mgr.on_console_text(ADMIN, 79, "pw me@example.com")
+        await asyncio.sleep(0.05)     # let the timeout fire
+
+    try:
+        run(drive())
+    finally:
+        manager_module.NICKSERV_REPLY_TIMEOUT = original
+    assert any("NickServ REGISTER pw me@example.com" in c for _b, c in be.commands)
+    assert gw.edits[-1][1] == mgr._tr("nickserv.no_reply")
+
+
+def test_reconnect_persists_the_reenabled_autoconnect():
+    # a runtime /set is memory-only: without the /save the value on disk stays
+    # whatever the last Disconnect wrote, and the next restart reads "off".
+    mgr, db, gw, be = make()
+    db.upsert_server("fuzer")
+    run(mgr.on_callback(ADMIN, "srv:disconnect:fuzer"))
+    run(mgr.on_callback(ADMIN, "srv:reconnect:fuzer"))
+    cmds = [c for _b, c in be.commands]
+    assert cmds.index("/set irc.server.fuzer.autoconnect on") < cmds.index("/reconnect fuzer")
+    assert cmds[cmds.index("/set irc.server.fuzer.autoconnect on") + 1] == "/save"
