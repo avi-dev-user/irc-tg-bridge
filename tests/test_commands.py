@@ -293,3 +293,25 @@ def test_build_commands_sets_autoconnect_so_a_restart_recovers():
     # and it is persisted, or it is lost with the next WeeChat restart
     assert cmds[-1] == "/save"
     assert cmds.index("/set irc.server.fuzer.autoconnect on") < cmds.index("/save")
+
+
+def test_build_commands_turns_tls_off_explicitly_for_a_plaintext_server():
+    # WeeChat 4.x inherits tls=on from server_default, so omitting -tls left a
+    # plaintext server attempting a TLS handshake on port 6667 and never
+    # connecting. The option has to be set off, not just left unset.
+    cmds = build_addserver_commands({
+        "name": "fuzer", "host": "irc.fuzer.xyz", "port": 6667,
+        "tls": False, "nick": "me", "auth": "nickserv", "password": "pw",
+        "privacy": "off",
+    })
+    assert "/set irc.server.fuzer.tls off" in cmds
+    assert cmds.index("/set irc.server.fuzer.tls off") < cmds.index("/connect fuzer")
+
+
+def test_build_commands_leaves_tls_on_for_an_encrypted_server():
+    cmds = build_addserver_commands({
+        "name": "libera", "host": "irc.libera.chat", "port": 6697,
+        "tls": True, "nick": "me", "auth": "none", "privacy": "off",
+    })
+    assert "/server add libera irc.libera.chat/6697 -tls" == cmds[0]
+    assert not any(".tls off" in c for c in cmds)

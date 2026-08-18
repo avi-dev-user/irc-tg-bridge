@@ -152,6 +152,12 @@ def build_addserver_commands(d: dict) -> list[str]:
         # stays silently down until someone notices, so set it at add time.
         f"/set irc.server.{name}.autoconnect on",
     ]
+    if not d.get("tls"):
+        # WeeChat 4.x defaults irc.server_default.tls to on, so leaving the flag
+        # off is not enough: the server inherits TLS and a plaintext port fails
+        # its handshake (observed on a 6667 server that reported "connecting to
+        # server ... (TLS)"). Say it explicitly.
+        cmds.append(f"/set irc.server.{name}.tls off")
     if d.get("tls") and host.endswith(".onion"):
         # A .onion address can never match the server's TLS certificate name, so
         # the hostname check always fails. The onion address is itself the
