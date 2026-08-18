@@ -106,6 +106,7 @@ async def run() -> None:
     router.set_server_status_callback(manager.on_server_status)
     router.set_channel_list_callback(manager.on_channel_list)
     router.set_names_callback(manager.on_names)
+    router.set_service_reply_callback(manager.on_service_reply)
     gateway.handlers(console=manager.on_console_text, callback=manager.on_callback,
                      conversation=router.handle_telegram, onboard=manager.on_onboard,
                      reaction=router.handle_telegram_reaction,

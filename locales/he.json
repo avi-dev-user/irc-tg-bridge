@@ -139,5 +139,9 @@
   "console.ambiguous_channel": "{channel} נמצא ביותר משרת אחד. הרץ את הפקודה בתוך הטופיק של הערוץ עצמו.",
   "status.connected": "מחובר",
   "status.connecting": "מתחבר...",
-  "status.disconnected": "מנותק"
+  "status.disconnected": "מנותק",
+  "menu.connect": "התחבר",
+  "nickserv.waiting": "הבקשה נשלחה ל-NickServ. ממתין לתשובה...",
+  "nickserv.no_reply": "לא הגיעה תשובה מ-NickServ. בדוק שהשרת מחובר ונסה שוב.",
+  "nickserv.reply": "NickServ: {text}"
 }

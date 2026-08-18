@@ -139,5 +139,9 @@
   "console.ambiguous_channel": "{channel} is on more than one server. Run the command inside its own topic instead.",
   "status.connected": "Connected",
   "status.connecting": "Connecting...",
-  "status.disconnected": "Disconnected"
+  "status.disconnected": "Disconnected",
+  "menu.connect": "Connect",
+  "nickserv.waiting": "Sent to NickServ. Waiting for its reply...",
+  "nickserv.no_reply": "No reply from NickServ. Check that the server is connected and try again.",
+  "nickserv.reply": "NickServ: {text}"
 }

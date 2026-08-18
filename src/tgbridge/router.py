@@ -256,6 +256,7 @@ class Router:
         # auto-NAMES on join still flows to its topic. Keyed by channel because
         # the reply names it, flushed to on_names on the 366 terminator.
         self._on_names = None
+        self._service_reply = None
         self._names_pending: set[str] = set()
         self._names_buffer: dict[str, dict[str, list]] = {}
         # WHOIS replies arrive as a burst of numerics terminated by 318; buffer
@@ -306,6 +307,14 @@ class Router:
 
     def set_names_callback(self, cb) -> None:
         self._on_names = cb
+
+    def set_service_reply_callback(self, cb) -> None:
+        """Called with (server, text) for a line from NickServ, so the console can
+        show what services actually answered a register/identify it just sent.
+        Without it the console can only say "sent" and point at another topic,
+        which reads as success even when the command went nowhere (the server had
+        dropped, so nothing was ever delivered)."""
+        self._service_reply = cb
 
     def mark_discover(self, server: str) -> None:
         """Start collecting the next /list reply for this server. Any partial
@@ -501,6 +510,13 @@ class Router:
         # Skip silently; a line with no msgid cannot be deduped, so it mirrors.
         if m.msgid and self._db.message_by_msgid(m.buffer, m.msgid) is not None:
             return
+        if self._service_reply is not None and m.nick.lower() == "nickserv":
+            # A console prompt may be waiting to display this; the line still
+            # mirrors to its own topic below either way.
+            try:
+                await self._service_reply(m.server, m.text)
+            except Exception as exc:
+                print(f"[router] service reply callback failed: {exc}")
         if m.buffer.startswith("irc.server."):
             # services/server messages (NickServ, server notices) go to the
             # server's own status topic.

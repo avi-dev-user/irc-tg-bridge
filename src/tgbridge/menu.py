@@ -112,13 +112,18 @@ def server_view_menu(t, server: dict) -> Menu:
     tap away under Settings, so this stays short."""
     name = server["name"]
     away_label = t("menu.back_from_away") if server.get("away") else t("menu.away")
+    # One button drives both cases, so its label has to say which one it is: on a
+    # disconnected server "Reconnect" reads as "nothing to do here", next to a
+    # Disconnect that is already the state.
+    connect_label = (t("menu.reconnect") if server.get("status") == "connected"
+                     else t("menu.connect"))
     return [
         [(t("menu.join"), cb("srv", "join", name)),
          (t("menu.channels"), cb("srv", "channels", name))],
         [(t("menu.discover"), cb("srv", "discover", name))],
         [(t("menu.change_nick"), cb("srv", "nick", name)),
          (away_label, cb("srv", "away", name))],
-        [(t("menu.reconnect"), cb("srv", "reconnect", name)),
+        [(connect_label, cb("srv", "reconnect", name)),
          (t("menu.disconnect"), cb("srv", "disconnect", name))],
         [(t("menu.settings_server"), cb("srv", "settings", name))],
         [(t("menu.remove"), cb("srv", "remove", name)),
