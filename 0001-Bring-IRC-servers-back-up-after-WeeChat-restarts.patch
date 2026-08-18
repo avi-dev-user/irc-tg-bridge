@@ -1,0 +1,466 @@
+From cf5ba46db4940d2a7d7137c7863feaa941f790ff Mon Sep 17 00:00:00 2001
+From: Avi <Avi@yemot.com>
+Date: Wed, 19 Aug 2026 00:12:29 +0300
+Subject: [PATCH 1/2] Bring IRC servers back up after WeeChat restarts
+
+WeeChat holds no IRC connection across a restart, and nothing brought the
+networks back: the add-server flow issued a single /connect and never set
+irc.server.<name>.autoconnect. So an unattended library upgrade restarting the
+unit was enough to lose every network silently - the relay stayed healthy and
+the bot kept answering, with no IRC behind it. One deployment sat like that for
+three weeks after a libc6 upgrade restarted WeeChat.
+
+Fix it at both layers. A newly added server gets WeeChat's own autoconnect (and
+it is persisted with the /save that already ran), so WeeChat recovers on its
+own even when the bridge is not running to see it. On top of that the bridge
+sweeps for servers that should be up but are not, every time it attaches to the
+relay, which also covers servers added before this change and a network whose
+autoconnect attempt failed.
+
+A deliberate disconnect from the menu must survive a restart too, so servers
+carry an autoconnect flag (schema 8, existing rows default to on): Disconnect
+clears it, Reconnect and a re-add set it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/tgbridge/commands.py   |  5 +++++
+ src/tgbridge/db.py         | 27 +++++++++++++++++++++--
+ src/tgbridge/ircbackend.py | 18 ++++++++++++++++
+ src/tgbridge/main.py       | 14 ++++++++++++
+ src/tgbridge/manager.py    | 35 ++++++++++++++++++++++++++++++
+ tests/test_commands.py     | 14 ++++++++++++
+ tests/test_db.py           | 44 ++++++++++++++++++++++++++++++++------
+ tests/test_ircbackend.py   | 37 +++++++++++++++++++++++++++++++-
+ tests/test_manager.py      | 36 +++++++++++++++++++++++++++++++
+ 9 files changed, 220 insertions(+), 10 deletions(-)
+
+diff --git a/src/tgbridge/commands.py b/src/tgbridge/commands.py
+index bd8433e..40d2fce 100644
+--- a/src/tgbridge/commands.py
++++ b/src/tgbridge/commands.py
+@@ -146,6 +146,11 @@ def build_addserver_commands(d: dict) -> list[str]:
+     cmds = [
+         f"/server add {name} {host}/{port}{tls_flag}",
+         f"/set irc.server.{name}.nicks {nick}",
++        # WeeChat holds no connection across a restart, and an unattended
++        # library upgrade restarting the unit is enough to lose every network.
++        # Without autoconnect the /connect below is a one-off and the server
++        # stays silently down until someone notices, so set it at add time.
++        f"/set irc.server.{name}.autoconnect on",
+     ]
+     if d.get("tls") and host.endswith(".onion"):
+         # A .onion address can never match the server's TLS certificate name, so
+diff --git a/src/tgbridge/db.py b/src/tgbridge/db.py
+index 4e2027d..7bbf8d2 100644
+--- a/src/tgbridge/db.py
++++ b/src/tgbridge/db.py
+@@ -15,7 +15,7 @@ import sqlite3
+ import time
+ from typing import Any, Iterable, Optional
+ 
+-SCHEMA_VERSION = 7
++SCHEMA_VERSION = 8
+ 
+ _SCHEMA = """
+ CREATE TABLE settings (
+@@ -34,7 +34,8 @@ CREATE TABLE servers (
+     caps         TEXT    NOT NULL DEFAULT '',       -- comma-separated IRCv3 caps seen
+     status       TEXT    NOT NULL DEFAULT 'disconnected',  -- connected | connecting | disconnected
+     perform      TEXT    NOT NULL DEFAULT '',       -- newline-separated commands to run on connect
+-    autojoin     INTEGER NOT NULL DEFAULT 1         -- rejoin known channels on connect
++    autojoin     INTEGER NOT NULL DEFAULT 1,        -- rejoin known channels on connect
++    autoconnect  INTEGER NOT NULL DEFAULT 1         -- bring this server up on its own after a restart
+ );
+ 
+ -- Telegram bots. The primary receives updates and manages; extra rows are
+@@ -162,6 +163,20 @@ class Database:
+                     "ALTER TABLE servers ADD COLUMN tls INTEGER NOT NULL DEFAULT 0")
+             self._conn.execute("PRAGMA user_version = 7")
+             self._conn.commit()
++        if version < 8:
++            # servers predates the autoconnect flag. WeeChat drops every IRC
++            # connection when it restarts (a library upgrade restarting the unit
++            # is enough), and nothing used to bring them back: the bridge only
++            # ever issued /connect while adding a server. Existing rows default
++            # to 1 so a bridge that was working before an upgrade comes back by
++            # itself; a server the user explicitly disconnected sets it to 0.
++            cols = [r["name"] for r in self._conn.execute("PRAGMA table_info(servers)")]
++            if cols and "autoconnect" not in cols:
++                self._conn.execute(
++                    "ALTER TABLE servers ADD COLUMN autoconnect "
++                    "INTEGER NOT NULL DEFAULT 1")
++            self._conn.execute("PRAGMA user_version = 8")
++            self._conn.commit()
+         # Future versions add their steps here, guarded by `version < N`.
+ 
+     def close(self) -> None:
+@@ -236,6 +251,14 @@ class Database:
+             "UPDATE servers SET autojoin = ? WHERE name = ?", (int(on), name))
+         self._conn.commit()
+ 
++    def set_autoconnect(self, name: str, on: bool) -> None:
++        """Whether the bridge should bring this server up when it finds it down
++        (on startup, or after WeeChat was restarted under it). Cleared when the
++        user disconnects on purpose, so their choice survives a restart too."""
++        self._conn.execute(
++            "UPDATE servers SET autoconnect = ? WHERE name = ?", (int(on), name))
++        self._conn.commit()
++
+     def get_server(self, name: str) -> Optional[dict]:
+         row = self._conn.execute(
+             "SELECT * FROM servers WHERE name = ?", (name,)
+diff --git a/src/tgbridge/ircbackend.py b/src/tgbridge/ircbackend.py
+index 361c29f..ce67e4e 100644
+--- a/src/tgbridge/ircbackend.py
++++ b/src/tgbridge/ircbackend.py
+@@ -362,6 +362,24 @@ def reconcile_server_status(db, connected: set[str]) -> None:
+         db.set_server_status(name, "connected" if name in connected else "disconnected")
+ 
+ 
++def servers_to_connect(rows, connected: set[str]) -> list[str]:
++    """The known servers that should be up but are not, in a stable order.
++
++    WeeChat starts with every network disconnected, so after it restarts (an
++    unattended upgrade restarting the unit is enough) the bridge finds itself
++    talking to a live relay with no IRC behind it. Everything the db knows and
++    WeeChat does not report a nick for is a candidate; a server the user
++    disconnected on purpose (autoconnect cleared) and one already mid-connect
++    are left alone. Pure: rows in, names out.
++    """
++    return sorted(
++        row["name"] for row in rows
++        if row.get("autoconnect", 1)
++        and row.get("status") != "connecting"
++        and row["name"] not in connected
++    )
++
++
+ class WeechatIrcBackend:
+     """Streams IrcMessage/IrcEvent from WeeChat and sends into IRC."""
+ 
+diff --git a/src/tgbridge/main.py b/src/tgbridge/main.py
+index 0217176..85eceba 100644
+--- a/src/tgbridge/main.py
++++ b/src/tgbridge/main.py
+@@ -165,6 +165,20 @@ async def run() -> None:
+                 # the freshly listed buffers before streaming, so status matches
+                 # reality at once; a later real 001 still flips status as usual.
+                 reconcile_server_status(db, backend.connected_servers())
++                # WeeChat comes up with every network down, so a restart under a
++                # live bridge (unattended upgrades restart its unit) leaves the
++                # relay healthy and IRC gone. Bring the wanted servers back here,
++                # every time we attach, before streaming.
++                try:
++                    brought_up = await manager.bring_up_servers(
++                        backend.connected_servers())
++                    if brought_up:
++                        print(f"[main] connecting servers found down: "
++                              f"{', '.join(brought_up)}")
++                except Exception as exc:
++                    # Never let recovery keep the bridge from streaming; the
++                    # servers can also be connected from the menu.
++                    print(f"[main] could not bring servers up: {exc}")
+                 await consume()
+             except Exception as exc:
+                 print(f"[relay] stream error: {exc}")
+diff --git a/src/tgbridge/manager.py b/src/tgbridge/manager.py
+index 190b265..6ce3692 100644
+--- a/src/tgbridge/manager.py
++++ b/src/tgbridge/manager.py
+@@ -15,6 +15,7 @@ from typing import Optional
+ 
+ from . import menu
+ from .commands import AddServerFlow, build_addserver_commands, is_valid_nick
++from .ircbackend import servers_to_connect
+ from .anon import build_anon_commands
+ 
+ CORE_BUFFER = "core.weechat"
+@@ -294,6 +295,7 @@ class Manager:
+             tls=bool(data.get("tls")), auth_method=data.get("auth", "none"),
+         )
+         self._db.set_server_status(data["name"], "connecting")
++        self._db.set_autoconnect(data["name"], True)
+         self._arm_connect(data["name"])
+         self._connect_msg[data["name"]] = self._flow_msg_id
+         self._connect_nick[data["name"]] = data["nick"]
+@@ -307,6 +309,29 @@ class Manager:
+         if self._router is not None:
+             self._router.arm_connect_timeout(name)
+ 
++    async def bring_up_servers(self, connected: set[str]) -> list[str]:
++        """Connect the known servers that should be up but are not.
++
++        Runs whenever the bridge (re)attaches to the relay. WeeChat restarts
++        with every network down - an unattended library upgrade restarting its
++        unit is enough - and nothing else notices: the relay is healthy, the bot
++        answers, and IRC is simply gone. Each server is also given WeeChat's own
++        autoconnect, so the next restart is handled by WeeChat itself even if the
++        bridge is not running to see it. Returns the servers it brought up.
++        """
++        pending = servers_to_connect(self._db.list_servers(), connected)
++        for name in pending:
++            await self._backend.send_command(
++                CORE_BUFFER, f"/set irc.server.{name}.autoconnect on")
++            self._db.set_server_status(name, "connecting")
++            self._arm_connect(name)
++            await self._backend.send_command(CORE_BUFFER, f"/connect {name}")
++        if pending:
++            # WeeChat keeps a runtime /set in memory only; persist so the
++            # autoconnect above survives the next restart.
++            await self._backend.send_command(CORE_BUFFER, "/save")
++        return pending
++
+     async def on_server_status(self, name: str, status: str) -> None:
+         msg_id = self._connect_msg.pop(name, None)
+         if msg_id is None:
+@@ -512,6 +537,9 @@ class Manager:
+             return (self._tr("nick.prompt"), self._prompt_back_row())
+         if action == "reconnect":
+             self._db.set_server_status(name, "connecting")
++            self._db.set_autoconnect(name, True)
++            await self._backend.send_command(
++                CORE_BUFFER, f"/set irc.server.{name}.autoconnect on")
+             self._arm_connect(name)
+             # /reconnect, not /connect: /connect is a no-op on an already-
+             # connected server (no fresh 001), so the status would sit on
+@@ -527,11 +555,18 @@ class Manager:
+             for s in self._db.list_servers():
+                 if s.get("status") != "connected":
+                     self._db.set_server_status(s["name"], "connecting")
++                    self._db.set_autoconnect(s["name"], True)
+                     self._arm_connect(s["name"])
+             await self._backend.send_command(CORE_BUFFER, "/reconnect -all")
+         elif action == "disconnect":
+             self._db.set_server_status(name, "disconnected")
++            # Deliberate: clear autoconnect so neither the bridge's startup sweep
++            # nor WeeChat brings this server back on its own.
++            self._db.set_autoconnect(name, False)
++            await self._backend.send_command(
++                CORE_BUFFER, f"/set irc.server.{name}.autoconnect off")
+             await self._backend.send_command(CORE_BUFFER, f"/disconnect {name}")
++            await self._backend.send_command(CORE_BUFFER, "/save")
+         elif action == "settings":
+             return self._server_settings_view(name)
+         elif action == "remove":
+diff --git a/tests/test_commands.py b/tests/test_commands.py
+index dc557d3..3c1602a 100644
+--- a/tests/test_commands.py
++++ b/tests/test_commands.py
+@@ -279,3 +279,17 @@ if __name__ == "__main__":
+             fn()
+             print(f"ok  {name}")
+     print("all tests passed")
++
++
++def test_build_commands_sets_autoconnect_so_a_restart_recovers():
++    # WeeChat drops every connection when it restarts and the /connect here runs
++    # only once; without autoconnect the server stays down until someone notices.
++    cmds = build_addserver_commands({
++        "name": "fuzer", "host": "irc.fuzer.xyz", "port": 6667,
++        "tls": False, "nick": "me", "auth": "nickserv", "password": "pw",
++        "privacy": "off",
++    })
++    assert "/set irc.server.fuzer.autoconnect on" in cmds
++    # and it is persisted, or it is lost with the next WeeChat restart
++    assert cmds[-1] == "/save"
++    assert cmds.index("/set irc.server.fuzer.autoconnect on") < cmds.index("/save")
+diff --git a/tests/test_db.py b/tests/test_db.py
+index 04df560..34c6c06 100644
+--- a/tests/test_db.py
++++ b/tests/test_db.py
+@@ -7,7 +7,7 @@ import tempfile
+ 
+ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+ 
+-from tgbridge.db import Database  # noqa: E402
++from tgbridge.db import Database, SCHEMA_VERSION  # noqa: E402
+ 
+ 
+ def fresh_db():
+@@ -164,7 +164,7 @@ def test_migration_adds_status_to_a_v1_database():
+ 
+     db = Database(path)
+     assert db.get_server("old")["status"] == "disconnected"
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+ 
+ 
+ def test_record_message_stores_and_returns_nick():
+@@ -201,7 +201,7 @@ def test_migration_adds_nick_to_a_v2_database():
+ 
+     db = Database(path)
+     assert db.message_by_tg(100, 7)["nick"] is None
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     # the new column is writable after migration
+     db.record_message(buffer="libera.#python", tg_chat_id=100, tg_message_id=8,
+                       owner_bot="primary", nick="bob")
+@@ -269,7 +269,7 @@ def test_migration_adds_open_to_a_v5_mapping():
+     conn.close()
+ 
+     db = Database(path)
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     # the pre-existing channel is treated as joined and the flag is writable
+     assert db.list_channels("libera") == [{"buffer": "irc.libera.#weechat", "topic_id": 2}]
+     db.set_channel_open("irc.libera.#weechat", False)
+@@ -350,7 +350,7 @@ def test_migration_adds_perform_and_autojoin_to_a_v3_database():
+     db = Database(path)
+     srv = db.get_server("old")
+     assert srv["perform"] == "" and srv["autojoin"] == 1
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     # the new columns are writable after migration
+     db.set_perform("old", "/join #back")
+     db.set_autojoin("old", False)
+@@ -433,7 +433,7 @@ def test_migration_adds_ignores_to_a_v4_database():
+     conn.close()
+ 
+     db = Database(path)
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     # the table exists and is usable after migration, case-insensitively
+     db.add_ignore("old", "Nuisance")
+     assert db.is_ignored("old", "nuisance") is True
+@@ -458,7 +458,7 @@ def test_migration_adds_tls_to_a_v6_database():
+     conn.close()
+ 
+     db = Database(path)
+-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+     cols = [r["name"] for r in db._conn.execute("PRAGMA table_info(servers)")]
+     assert "tls" in cols
+     assert db.get_server("old")["tls"] == 0   # existing rows default to off
+@@ -478,3 +478,33 @@ if __name__ == "__main__":
+             fn()
+             print(f"ok  {name}")
+     print("all tests passed")
++
++
++def test_migration_adds_autoconnect_to_a_v7_database():
++    # the fix for the silent outage: an existing bridge must come up wanting its
++    # servers back, so old rows default to autoconnect on.
++    path = os.path.join(tempfile.mkdtemp(), "b.db")
++    conn = sqlite3.connect(path)
++    conn.execute(
++        "CREATE TABLE servers ("
++        "name TEXT PRIMARY KEY, anon INTEGER NOT NULL DEFAULT 0, "
++        "tor INTEGER NOT NULL DEFAULT 0, "
++        "tls INTEGER NOT NULL DEFAULT 0, "
++        "noise_filter TEXT NOT NULL DEFAULT 'join,part,quit', "
++        "auth_method TEXT NOT NULL DEFAULT 'none', "
++        "caps TEXT NOT NULL DEFAULT '', "
++        "status TEXT NOT NULL DEFAULT 'disconnected', "
++        "perform TEXT NOT NULL DEFAULT '', "
++        "autojoin INTEGER NOT NULL DEFAULT 1)")
++    conn.execute("INSERT INTO servers(name) VALUES('old')")
++    conn.execute("PRAGMA user_version = 7")
++    conn.commit()
++    conn.close()
++
++    db = Database(path)
++    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
++    cols = [r["name"] for r in db._conn.execute("PRAGMA table_info(servers)")]
++    assert "autoconnect" in cols
++    assert db.get_server("old")["autoconnect"] == 1
++    db.set_autoconnect("old", False)
++    assert db.get_server("old")["autoconnect"] == 0
+diff --git a/tests/test_ircbackend.py b/tests/test_ircbackend.py
+index a155a58..b201084 100644
+--- a/tests/test_ircbackend.py
++++ b/tests/test_ircbackend.py
+@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+ 
+ from tgbridge.ircbackend import (  # noqa: E402
+     parse_line, channel_join_event, channel_close_event, private_open_event,
+-    connected_servers, reconcile_server_status,
++    connected_servers, reconcile_server_status, servers_to_connect,
+     IrcMessage, IrcEvent, IrcReaction, IrcRedact)
+ 
+ SERVER_BUF = {"name": "irc.lt", "type": "server", "server": "lt", "conversation": "lt"}
+@@ -467,3 +467,38 @@ if __name__ == "__main__":
+             fn()
+             print(f"ok  {name}")
+     print("all tests passed")
++
++
++def _rows(*specs):
++    """Server rows as list_servers() returns them: (name, status, autoconnect)."""
++    return [{"name": n, "status": st, "autoconnect": ac} for n, st, ac in specs]
++
++
++def test_servers_to_connect_picks_the_ones_weechat_lost():
++    # WeeChat restarted: it reports a nick for nothing, so every wanted server
++    # is down and must be brought back (this is the outage that motivated it).
++    rows = _rows(("libera", "connected", 1), ("hebits", "connected", 1))
++    assert servers_to_connect(rows, set()) == ["hebits", "libera"]
++
++
++def test_servers_to_connect_skips_the_already_connected():
++    rows = _rows(("libera", "connected", 1), ("hebits", "disconnected", 1))
++    assert servers_to_connect(rows, {"libera"}) == ["hebits"]
++
++
++def test_servers_to_connect_respects_a_deliberate_disconnect():
++    # the user disconnected hebits from the menu; a restart must not undo that
++    rows = _rows(("libera", "disconnected", 1), ("hebits", "disconnected", 0))
++    assert servers_to_connect(rows, set()) == ["libera"]
++
++
++def test_servers_to_connect_leaves_a_connecting_server_alone():
++    # a connect is already in flight (its timeout is armed): no second /connect
++    rows = _rows(("libera", "connecting", 1))
++    assert servers_to_connect(rows, set()) == []
++
++
++def test_servers_to_connect_defaults_to_wanted_when_the_column_is_absent():
++    # a row from a database written before the autoconnect migration
++    assert servers_to_connect([{"name": "libera", "status": "disconnected"}],
++                              set()) == ["libera"]
+diff --git a/tests/test_manager.py b/tests/test_manager.py
+index d1cc2c6..d216b00 100644
+--- a/tests/test_manager.py
++++ b/tests/test_manager.py
+@@ -1560,3 +1560,39 @@ if __name__ == "__main__":
+             fn()
+             print(f"ok  {name}")
+     print("all tests passed")
++
++
++def test_bring_up_servers_connects_what_weechat_lost():
++    # the outage: WeeChat restarted under a live bridge, so it reports nothing
++    # connected while the db still knows both servers.
++    mgr, db, gw, be = make()
++    db.upsert_server("libera")
++    db.upsert_server("hebits")
++    brought = run(mgr.bring_up_servers(set()))
++    assert brought == ["hebits", "libera"]
++    assert (CORE_BUFFER, "/connect libera") in be.commands
++    assert (CORE_BUFFER, "/connect hebits") in be.commands
++    # WeeChat is also taught to do it itself next time, and it is persisted
++    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect on") in be.commands
++    assert be.commands[-1] == (CORE_BUFFER, "/save")
++    assert db.get_server("libera")["status"] == "connecting"
++
++
++def test_bring_up_servers_is_a_no_op_when_everything_is_up():
++    mgr, db, gw, be = make()
++    db.upsert_server("libera")
++    assert run(mgr.bring_up_servers({"libera"})) == []
++    assert be.commands == []
++
++
++def test_disconnect_clears_autoconnect_and_reconnect_restores_it():
++    mgr, db, gw, be = make()
++    db.upsert_server("libera")
++    run(mgr.on_callback(ADMIN, "srv:disconnect:libera"))
++    assert db.get_server("libera")["autoconnect"] == 0
++    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect off") in be.commands
++    # a server left off must stay off across a restart sweep
++    assert run(mgr.bring_up_servers(set())) == []
++    run(mgr.on_callback(ADMIN, "srv:reconnect:libera"))
++    assert db.get_server("libera")["autoconnect"] == 1
++    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect on") in be.commands
+-- 
+2.53.0
+
