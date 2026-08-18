@@ -37,6 +37,14 @@ ReactionAdded = Callable[[int, str], Awaitable[None]]
 # (topic_id, local_path): a document/photo was sent in a conversation topic
 OutgoingFile = Callable[[int, str], Awaitable[None]]
 
+# How long a send may block waiting out a Telegram flood limit. Kurigram waits
+# transparently for a FLOOD_WAIT under this threshold and raises above it; its
+# default of 10s is below what a busy channel actually triggers (18-31s observed
+# on a backlog burst), and every raise loses that message. A high threshold
+# turns those losses into a delay, which is what a mirror wants; beyond it
+# something is wrong enough that failing loudly is right.
+FLOOD_SLEEP_THRESHOLD = 240
+
 # Commands the bot owns. They are never forwarded to IRC as raw commands.
 _BOT_COMMANDS = {"start", "usegroup", "cancel", "help", "settings", "language",
                  "console", "menu"}
@@ -47,7 +55,8 @@ class TelegramGateway:
                  session_dir: str, group_chat_id: int, console_topic_id: int,
                  owner_bot_id: str = "primary"):
         self._client = Client("tgbridge_bot", api_id=api_id, api_hash=api_hash,
-                              bot_token=bot_token, workdir=session_dir)
+                              bot_token=bot_token, workdir=session_dir,
+                              sleep_threshold=FLOOD_SLEEP_THRESHOLD)
         self._api_id = api_id
         self._api_hash = api_hash
         self._session_dir = session_dir
@@ -191,7 +200,8 @@ class TelegramGateway:
                 worker = Client(
                     f"tgbridge_bot_{bot_id}", api_id=self._api_id,
                     api_hash=self._api_hash, bot_token=s["token"],
-                    workdir=self._session_dir)
+                    workdir=self._session_dir,
+                    sleep_threshold=FLOOD_SLEEP_THRESHOLD)
                 await worker.start()
                 self._workers[bot_id] = worker
             except Exception as exc:
