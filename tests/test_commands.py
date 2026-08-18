@@ -279,3 +279,17 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def test_build_commands_sets_autoconnect_so_a_restart_recovers():
+    # WeeChat drops every connection when it restarts and the /connect here runs
+    # only once; without autoconnect the server stays down until someone notices.
+    cmds = build_addserver_commands({
+        "name": "fuzer", "host": "irc.fuzer.xyz", "port": 6667,
+        "tls": False, "nick": "me", "auth": "nickserv", "password": "pw",
+        "privacy": "off",
+    })
+    assert "/set irc.server.fuzer.autoconnect on" in cmds
+    # and it is persisted, or it is lost with the next WeeChat restart
+    assert cmds[-1] == "/save"
+    assert cmds.index("/set irc.server.fuzer.autoconnect on") < cmds.index("/save")

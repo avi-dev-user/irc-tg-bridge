@@ -1560,3 +1560,39 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def test_bring_up_servers_connects_what_weechat_lost():
+    # the outage: WeeChat restarted under a live bridge, so it reports nothing
+    # connected while the db still knows both servers.
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    db.upsert_server("hebits")
+    brought = run(mgr.bring_up_servers(set()))
+    assert brought == ["hebits", "libera"]
+    assert (CORE_BUFFER, "/connect libera") in be.commands
+    assert (CORE_BUFFER, "/connect hebits") in be.commands
+    # WeeChat is also taught to do it itself next time, and it is persisted
+    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect on") in be.commands
+    assert be.commands[-1] == (CORE_BUFFER, "/save")
+    assert db.get_server("libera")["status"] == "connecting"
+
+
+def test_bring_up_servers_is_a_no_op_when_everything_is_up():
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    assert run(mgr.bring_up_servers({"libera"})) == []
+    assert be.commands == []
+
+
+def test_disconnect_clears_autoconnect_and_reconnect_restores_it():
+    mgr, db, gw, be = make()
+    db.upsert_server("libera")
+    run(mgr.on_callback(ADMIN, "srv:disconnect:libera"))
+    assert db.get_server("libera")["autoconnect"] == 0
+    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect off") in be.commands
+    # a server left off must stay off across a restart sweep
+    assert run(mgr.bring_up_servers(set())) == []
+    run(mgr.on_callback(ADMIN, "srv:reconnect:libera"))
+    assert db.get_server("libera")["autoconnect"] == 1
+    assert (CORE_BUFFER, "/set irc.server.libera.autoconnect on") in be.commands

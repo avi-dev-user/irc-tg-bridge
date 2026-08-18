@@ -7,7 +7,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from tgbridge.db import Database  # noqa: E402
+from tgbridge.db import Database, SCHEMA_VERSION  # noqa: E402
 
 
 def fresh_db():
@@ -164,7 +164,7 @@ def test_migration_adds_status_to_a_v1_database():
 
     db = Database(path)
     assert db.get_server("old")["status"] == "disconnected"
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_record_message_stores_and_returns_nick():
@@ -201,7 +201,7 @@ def test_migration_adds_nick_to_a_v2_database():
 
     db = Database(path)
     assert db.message_by_tg(100, 7)["nick"] is None
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     # the new column is writable after migration
     db.record_message(buffer="libera.#python", tg_chat_id=100, tg_message_id=8,
                       owner_bot="primary", nick="bob")
@@ -269,7 +269,7 @@ def test_migration_adds_open_to_a_v5_mapping():
     conn.close()
 
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     # the pre-existing channel is treated as joined and the flag is writable
     assert db.list_channels("libera") == [{"buffer": "irc.libera.#weechat", "topic_id": 2}]
     db.set_channel_open("irc.libera.#weechat", False)
@@ -350,7 +350,7 @@ def test_migration_adds_perform_and_autojoin_to_a_v3_database():
     db = Database(path)
     srv = db.get_server("old")
     assert srv["perform"] == "" and srv["autojoin"] == 1
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     # the new columns are writable after migration
     db.set_perform("old", "/join #back")
     db.set_autojoin("old", False)
@@ -433,7 +433,7 @@ def test_migration_adds_ignores_to_a_v4_database():
     conn.close()
 
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     # the table exists and is usable after migration, case-insensitively
     db.add_ignore("old", "Nuisance")
     assert db.is_ignored("old", "nuisance") is True
@@ -458,7 +458,7 @@ def test_migration_adds_tls_to_a_v6_database():
     conn.close()
 
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     cols = [r["name"] for r in db._conn.execute("PRAGMA table_info(servers)")]
     assert "tls" in cols
     assert db.get_server("old")["tls"] == 0   # existing rows default to off
@@ -478,3 +478,33 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def test_migration_adds_autoconnect_to_a_v7_database():
+    # the fix for the silent outage: an existing bridge must come up wanting its
+    # servers back, so old rows default to autoconnect on.
+    path = os.path.join(tempfile.mkdtemp(), "b.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE servers ("
+        "name TEXT PRIMARY KEY, anon INTEGER NOT NULL DEFAULT 0, "
+        "tor INTEGER NOT NULL DEFAULT 0, "
+        "tls INTEGER NOT NULL DEFAULT 0, "
+        "noise_filter TEXT NOT NULL DEFAULT 'join,part,quit', "
+        "auth_method TEXT NOT NULL DEFAULT 'none', "
+        "caps TEXT NOT NULL DEFAULT '', "
+        "status TEXT NOT NULL DEFAULT 'disconnected', "
+        "perform TEXT NOT NULL DEFAULT '', "
+        "autojoin INTEGER NOT NULL DEFAULT 1)")
+    conn.execute("INSERT INTO servers(name) VALUES('old')")
+    conn.execute("PRAGMA user_version = 7")
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = [r["name"] for r in db._conn.execute("PRAGMA table_info(servers)")]
+    assert "autoconnect" in cols
+    assert db.get_server("old")["autoconnect"] == 1
+    db.set_autoconnect("old", False)
+    assert db.get_server("old")["autoconnect"] == 0

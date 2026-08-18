@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from tgbridge.ircbackend import (  # noqa: E402
     parse_line, channel_join_event, channel_close_event, private_open_event,
-    connected_servers, reconcile_server_status,
+    connected_servers, reconcile_server_status, servers_to_connect,
     IrcMessage, IrcEvent, IrcReaction, IrcRedact)
 
 SERVER_BUF = {"name": "irc.lt", "type": "server", "server": "lt", "conversation": "lt"}
@@ -467,3 +467,38 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def _rows(*specs):
+    """Server rows as list_servers() returns them: (name, status, autoconnect)."""
+    return [{"name": n, "status": st, "autoconnect": ac} for n, st, ac in specs]
+
+
+def test_servers_to_connect_picks_the_ones_weechat_lost():
+    # WeeChat restarted: it reports a nick for nothing, so every wanted server
+    # is down and must be brought back (this is the outage that motivated it).
+    rows = _rows(("libera", "connected", 1), ("hebits", "connected", 1))
+    assert servers_to_connect(rows, set()) == ["hebits", "libera"]
+
+
+def test_servers_to_connect_skips_the_already_connected():
+    rows = _rows(("libera", "connected", 1), ("hebits", "disconnected", 1))
+    assert servers_to_connect(rows, {"libera"}) == ["hebits"]
+
+
+def test_servers_to_connect_respects_a_deliberate_disconnect():
+    # the user disconnected hebits from the menu; a restart must not undo that
+    rows = _rows(("libera", "disconnected", 1), ("hebits", "disconnected", 0))
+    assert servers_to_connect(rows, set()) == ["libera"]
+
+
+def test_servers_to_connect_leaves_a_connecting_server_alone():
+    # a connect is already in flight (its timeout is armed): no second /connect
+    rows = _rows(("libera", "connecting", 1))
+    assert servers_to_connect(rows, set()) == []
+
+
+def test_servers_to_connect_defaults_to_wanted_when_the_column_is_absent():
+    # a row from a database written before the autoconnect migration
+    assert servers_to_connect([{"name": "libera", "status": "disconnected"}],
+                              set()) == ["libera"]

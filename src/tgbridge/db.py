@@ -15,7 +15,7 @@ import sqlite3
 import time
 from typing import Any, Iterable, Optional
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE settings (
@@ -34,7 +34,8 @@ CREATE TABLE servers (
     caps         TEXT    NOT NULL DEFAULT '',       -- comma-separated IRCv3 caps seen
     status       TEXT    NOT NULL DEFAULT 'disconnected',  -- connected | connecting | disconnected
     perform      TEXT    NOT NULL DEFAULT '',       -- newline-separated commands to run on connect
-    autojoin     INTEGER NOT NULL DEFAULT 1         -- rejoin known channels on connect
+    autojoin     INTEGER NOT NULL DEFAULT 1,        -- rejoin known channels on connect
+    autoconnect  INTEGER NOT NULL DEFAULT 1         -- bring this server up on its own after a restart
 );
 
 -- Telegram bots. The primary receives updates and manages; extra rows are
@@ -162,6 +163,20 @@ class Database:
                     "ALTER TABLE servers ADD COLUMN tls INTEGER NOT NULL DEFAULT 0")
             self._conn.execute("PRAGMA user_version = 7")
             self._conn.commit()
+        if version < 8:
+            # servers predates the autoconnect flag. WeeChat drops every IRC
+            # connection when it restarts (a library upgrade restarting the unit
+            # is enough), and nothing used to bring them back: the bridge only
+            # ever issued /connect while adding a server. Existing rows default
+            # to 1 so a bridge that was working before an upgrade comes back by
+            # itself; a server the user explicitly disconnected sets it to 0.
+            cols = [r["name"] for r in self._conn.execute("PRAGMA table_info(servers)")]
+            if cols and "autoconnect" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE servers ADD COLUMN autoconnect "
+                    "INTEGER NOT NULL DEFAULT 1")
+            self._conn.execute("PRAGMA user_version = 8")
+            self._conn.commit()
         # Future versions add their steps here, guarded by `version < N`.
 
     def close(self) -> None:
@@ -234,6 +249,14 @@ class Database:
     def set_autojoin(self, name: str, on: bool) -> None:
         self._conn.execute(
             "UPDATE servers SET autojoin = ? WHERE name = ?", (int(on), name))
+        self._conn.commit()
+
+    def set_autoconnect(self, name: str, on: bool) -> None:
+        """Whether the bridge should bring this server up when it finds it down
+        (on startup, or after WeeChat was restarted under it). Cleared when the
+        user disconnects on purpose, so their choice survives a restart too."""
+        self._conn.execute(
+            "UPDATE servers SET autoconnect = ? WHERE name = ?", (int(on), name))
         self._conn.commit()
 
     def get_server(self, name: str) -> Optional[dict]:
