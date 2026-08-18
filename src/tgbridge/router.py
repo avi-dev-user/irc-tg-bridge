@@ -371,6 +371,28 @@ class Router:
         if self._on_server_status is not None:
             await self._on_server_status(server, "failed")
 
+    async def resync_connected(self, servers) -> list[str]:
+        """Run the on-connect setup for servers that were already registered when
+        we attached to the relay.
+
+        RPL_WELCOME is what normally triggers it, but WeeChat's own autoconnect
+        races the bridge: a fast network finishes registering while the bridge is
+        still starting, its welcome is never seen, and the server ends up
+        connected with no identify, no requested invites and none of its channels
+        rejoined. Observed on a restart where one network came back fully and
+        another sat idle outside its invite-only channels.
+
+        Everything it runs is idempotent, so a server we did see the welcome for
+        loses nothing by being resynced: NickServ answers that we are already
+        identified, a repeated invite request is ignored, and WeeChat drops a
+        join for a channel we are already in.
+        """
+        done = []
+        for server in sorted(servers):
+            await self._perform_on_connect(server)
+            done.append(server)
+        return done
+
     async def _perform_on_connect(self, server: str) -> None:
         """Run the server's on-connect setup: its perform script first (so an
         invite it requests lands before we try the channel), then rejoin the

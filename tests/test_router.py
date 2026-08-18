@@ -2023,3 +2023,40 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all tests passed")
+
+
+def test_resync_runs_the_on_connect_setup_for_an_already_connected_server():
+    # WeeChat autoconnected this server before the bridge attached, so its
+    # welcome was never seen: identify, the invite request and the rejoins all
+    # have to be replayed or the server sits connected and idle.
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("lt")
+    db.set_perform("lt", "/msg NickServ IDENTIFY pw\n/msg InviteBot !invite KEY")
+    db.set_mapping("irc.lt.#weechat", 2, "primary")
+    r = Router(db, gw, irc)
+    assert run(r.resync_connected({"lt"})) == ["lt"]
+    assert irc.commands == [
+        ("irc.server.lt", "/msg NickServ IDENTIFY pw"),
+        ("irc.server.lt", "/msg InviteBot !invite KEY"),
+        ("irc.server.lt", "/join #weechat"),
+    ]
+
+
+def test_resync_covers_every_connected_server_in_a_stable_order():
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    db.upsert_server("aa")
+    db.upsert_server("zz")
+    db.set_perform("aa", "/mode +x")
+    db.set_perform("zz", "/mode +y")
+    r = Router(db, gw, irc)
+    assert run(r.resync_connected({"zz", "aa"})) == ["aa", "zz"]
+    assert irc.commands == [("irc.server.aa", "/mode +x"),
+                            ("irc.server.zz", "/mode +y")]
+
+
+def test_resync_of_an_unknown_server_issues_nothing():
+    # a server live in WeeChat but not in the db has no setup to replay
+    gw, irc, db = FakeGateway(), FakeIrc(), _db()
+    r = Router(db, gw, irc)
+    assert run(r.resync_connected({"ghost"})) == ["ghost"]
+    assert irc.commands == []
