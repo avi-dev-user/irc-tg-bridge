@@ -165,6 +165,20 @@ async def run() -> None:
                 # the freshly listed buffers before streaming, so status matches
                 # reality at once; a later real 001 still flips status as usual.
                 reconcile_server_status(db, backend.connected_servers())
+                # WeeChat comes up with every network down, so a restart under a
+                # live bridge (unattended upgrades restart its unit) leaves the
+                # relay healthy and IRC gone. Bring the wanted servers back here,
+                # every time we attach, before streaming.
+                try:
+                    brought_up = await manager.bring_up_servers(
+                        backend.connected_servers())
+                    if brought_up:
+                        print(f"[main] connecting servers found down: "
+                              f"{', '.join(brought_up)}")
+                except Exception as exc:
+                    # Never let recovery keep the bridge from streaming; the
+                    # servers can also be connected from the menu.
+                    print(f"[main] could not bring servers up: {exc}")
                 await consume()
             except Exception as exc:
                 print(f"[relay] stream error: {exc}")

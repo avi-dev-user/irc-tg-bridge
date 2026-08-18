@@ -362,6 +362,24 @@ def reconcile_server_status(db, connected: set[str]) -> None:
         db.set_server_status(name, "connected" if name in connected else "disconnected")
 
 
+def servers_to_connect(rows, connected: set[str]) -> list[str]:
+    """The known servers that should be up but are not, in a stable order.
+
+    WeeChat starts with every network disconnected, so after it restarts (an
+    unattended upgrade restarting the unit is enough) the bridge finds itself
+    talking to a live relay with no IRC behind it. Everything the db knows and
+    WeeChat does not report a nick for is a candidate; a server the user
+    disconnected on purpose (autoconnect cleared) and one already mid-connect
+    are left alone. Pure: rows in, names out.
+    """
+    return sorted(
+        row["name"] for row in rows
+        if row.get("autoconnect", 1)
+        and row.get("status") != "connecting"
+        and row["name"] not in connected
+    )
+
+
 class WeechatIrcBackend:
     """Streams IrcMessage/IrcEvent from WeeChat and sends into IRC."""
 

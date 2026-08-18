@@ -15,6 +15,7 @@ from typing import Optional
 
 from . import menu
 from .commands import AddServerFlow, build_addserver_commands, is_valid_nick
+from .ircbackend import servers_to_connect
 from .anon import build_anon_commands
 
 CORE_BUFFER = "core.weechat"
@@ -294,6 +295,7 @@ class Manager:
             tls=bool(data.get("tls")), auth_method=data.get("auth", "none"),
         )
         self._db.set_server_status(data["name"], "connecting")
+        self._db.set_autoconnect(data["name"], True)
         self._arm_connect(data["name"])
         self._connect_msg[data["name"]] = self._flow_msg_id
         self._connect_nick[data["name"]] = data["nick"]
@@ -306,6 +308,29 @@ class Manager:
     def _arm_connect(self, name: str) -> None:
         if self._router is not None:
             self._router.arm_connect_timeout(name)
+
+    async def bring_up_servers(self, connected: set[str]) -> list[str]:
+        """Connect the known servers that should be up but are not.
+
+        Runs whenever the bridge (re)attaches to the relay. WeeChat restarts
+        with every network down - an unattended library upgrade restarting its
+        unit is enough - and nothing else notices: the relay is healthy, the bot
+        answers, and IRC is simply gone. Each server is also given WeeChat's own
+        autoconnect, so the next restart is handled by WeeChat itself even if the
+        bridge is not running to see it. Returns the servers it brought up.
+        """
+        pending = servers_to_connect(self._db.list_servers(), connected)
+        for name in pending:
+            await self._backend.send_command(
+                CORE_BUFFER, f"/set irc.server.{name}.autoconnect on")
+            self._db.set_server_status(name, "connecting")
+            self._arm_connect(name)
+            await self._backend.send_command(CORE_BUFFER, f"/connect {name}")
+        if pending:
+            # WeeChat keeps a runtime /set in memory only; persist so the
+            # autoconnect above survives the next restart.
+            await self._backend.send_command(CORE_BUFFER, "/save")
+        return pending
 
     async def on_server_status(self, name: str, status: str) -> None:
         msg_id = self._connect_msg.pop(name, None)
@@ -512,6 +537,9 @@ class Manager:
             return (self._tr("nick.prompt"), self._prompt_back_row())
         if action == "reconnect":
             self._db.set_server_status(name, "connecting")
+            self._db.set_autoconnect(name, True)
+            await self._backend.send_command(
+                CORE_BUFFER, f"/set irc.server.{name}.autoconnect on")
             self._arm_connect(name)
             # /reconnect, not /connect: /connect is a no-op on an already-
             # connected server (no fresh 001), so the status would sit on
@@ -527,11 +555,18 @@ class Manager:
             for s in self._db.list_servers():
                 if s.get("status") != "connected":
                     self._db.set_server_status(s["name"], "connecting")
+                    self._db.set_autoconnect(s["name"], True)
                     self._arm_connect(s["name"])
             await self._backend.send_command(CORE_BUFFER, "/reconnect -all")
         elif action == "disconnect":
             self._db.set_server_status(name, "disconnected")
+            # Deliberate: clear autoconnect so neither the bridge's startup sweep
+            # nor WeeChat brings this server back on its own.
+            self._db.set_autoconnect(name, False)
+            await self._backend.send_command(
+                CORE_BUFFER, f"/set irc.server.{name}.autoconnect off")
             await self._backend.send_command(CORE_BUFFER, f"/disconnect {name}")
+            await self._backend.send_command(CORE_BUFFER, "/save")
         elif action == "settings":
             return self._server_settings_view(name)
         elif action == "remove":

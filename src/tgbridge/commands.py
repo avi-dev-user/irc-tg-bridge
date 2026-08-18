@@ -146,6 +146,11 @@ def build_addserver_commands(d: dict) -> list[str]:
     cmds = [
         f"/server add {name} {host}/{port}{tls_flag}",
         f"/set irc.server.{name}.nicks {nick}",
+        # WeeChat holds no connection across a restart, and an unattended
+        # library upgrade restarting the unit is enough to lose every network.
+        # Without autoconnect the /connect below is a one-off and the server
+        # stays silently down until someone notices, so set it at add time.
+        f"/set irc.server.{name}.autoconnect on",
     ]
     if d.get("tls") and host.endswith(".onion"):
         # A .onion address can never match the server's TLS certificate name, so
