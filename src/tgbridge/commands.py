@@ -47,6 +47,7 @@ class AddServerFlow:
         ("host", "addserver.host", "text", None),
         ("port", "addserver.port", "text", None),
         ("tls", "addserver.tls", "choice", ["yes", "no"]),
+        ("tls_verify", "addserver.tls_verify", "choice", ["yes", "no"]),
         ("nick", "addserver.nick", "text", None),
         ("auth", "addserver.auth", "choice", ["sasl", "nickserv", "none"]),
         ("password", "addserver.sasl", "text", None),
@@ -73,6 +74,10 @@ class AddServerFlow:
             # step back over the password step when auth is none (it is skipped)
             if self.STEPS[self.step][0] == "password" and self.data.get("auth") == "none":
                 self.step -= 1
+            # Plaintext connections never show the certificate-verification
+            # question, so do not land on it while navigating backwards.
+            if self.STEPS[self.step][0] == "tls_verify" and not self.data.get("tls"):
+                self.step -= 1
 
     def options(self):
         step = self.current()
@@ -86,6 +91,11 @@ class AddServerFlow:
             raise ValueError("a password is required for sasl/nickserv")
         self.data[field_name] = validated
         self.step += 1
+        # Certificate verification only applies to encrypted connections.
+        if self.step < len(self.STEPS) and self.STEPS[self.step][0] == "tls_verify" \
+                and not self.data.get("tls"):
+            self.data["tls_verify"] = False
+            self.step += 1
         # auth "none" has no password to ask for
         if self.step < len(self.STEPS) and self.STEPS[self.step][0] == "password" \
                 and self.data.get("auth") == "none":
@@ -124,7 +134,7 @@ class AddServerFlow:
             return v.lower()
         if field_name == "password":
             return None if v.lower() == "skip" else v
-        if field_name == "tls":
+        if field_name in ("tls", "tls_verify"):
             return v.lower() in ("yes", "y", "1", "true", "כן")
         if field_name == "privacy":
             if v.lower() not in ("off", "tor", "anon"):
@@ -158,7 +168,8 @@ def build_addserver_commands(d: dict) -> list[str]:
         # its handshake (observed on a 6667 server that reported "connecting to
         # server ... (TLS)"). Say it explicitly.
         cmds.append(f"/set irc.server.{name}.tls off")
-    if d.get("tls") and host.endswith(".onion"):
+    verify_tls = d.get("tls_verify", True)
+    if d.get("tls") and (not verify_tls or host.endswith(".onion")):
         # A .onion address can never match the server's TLS certificate name, so
         # the hostname check always fails. The onion address is itself the
         # server's cryptographic identity (Tor guarantees the right peer), so the

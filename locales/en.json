@@ -121,6 +121,7 @@
   "denied": "This bot is private.",
   "unknown_command": "Unknown command.",
   "addserver.tls": "Use TLS (an encrypted connection)?\nYes for a normal public server (usually port 6697). No for a plaintext or local test server (for example port 6667).",
+  "addserver.tls_verify": "Verify the server's TLS certificate?\nYes is recommended. Choose No only for a legacy network with a self-signed or mismatched certificate, such as EFnet.",
   "addserver.privacy": "Privacy for this server?\n- None: a normal connection.\n- Tor: hide your IP behind Tor.\n- Anonymous: full anonymity (Tor, a scrubbed identity, remote DNS, and CTCP and file transfers off).\nChoose None for a normal or local server.",
   "privacy.off": "None",
   "privacy.tor": "Tor",

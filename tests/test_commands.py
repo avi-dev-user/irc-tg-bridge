@@ -20,12 +20,12 @@ def run_flow(answers):
 
 
 def test_full_sasl_flow_collects_all_fields():
-    flow = run_flow(["libera", "irc.libera.chat", "6697", "yes", "mynick",
+    flow = run_flow(["libera", "irc.libera.chat", "6697", "yes", "yes", "mynick",
                      "sasl", "secretpw", "off"])
     assert flow.is_complete()
     assert flow.data == {
         "name": "libera", "host": "irc.libera.chat", "port": 6697,
-        "tls": True, "nick": "mynick", "auth": "sasl", "password": "secretpw",
+        "tls": True, "tls_verify": True, "nick": "mynick", "auth": "sasl", "password": "secretpw",
         "privacy": "off",
     }
 
@@ -38,6 +38,24 @@ def test_none_auth_skips_password_step():
     assert flow.prompt_key() == "addserver.privacy"
     flow.feed("off")
     assert flow.is_complete() and "password" not in flow.data
+
+
+def test_tls_flow_asks_certificate_verification():
+    flow = AddServerFlow()
+    for value in ["efnet", "irc.efnet.org", "6697", "yes"]:
+        flow.feed(value)
+    assert flow.prompt_key() == "addserver.tls_verify"
+    flow.feed("no")
+    assert flow.data["tls_verify"] is False
+    assert flow.prompt_key() == "addserver.nick"
+
+
+def test_plaintext_flow_skips_certificate_verification():
+    flow = AddServerFlow()
+    for value in ["local", "localhost", "6667", "no"]:
+        flow.feed(value)
+    assert flow.prompt_key() == "addserver.nick"
+    assert flow.data["tls_verify"] is False
 
 
 def test_flow_validation_rejects_bad_port_and_name():
@@ -127,6 +145,17 @@ def test_build_commands_no_tls_verify_change_for_clearnet():
         "tls": True, "nick": "me", "auth": "none", "privacy": "off",
     })
     assert not any("tls_verify" in c for c in cmds)
+
+
+def test_build_commands_can_disable_tls_verify_for_legacy_server():
+    cmds = build_addserver_commands({
+        "name": "efnet", "host": "irc.efnet.org", "port": 6697,
+        "tls": True, "tls_verify": False, "nick": "NoCarrier",
+        "auth": "none", "privacy": "off",
+    })
+    assert "/set irc.server.efnet.tls_verify off" in cmds
+    assert cmds.index("/set irc.server.efnet.tls_verify off") \
+        < cmds.index("/connect efnet")
 
 
 def test_build_commands_tor_privacy_sets_proxy():

@@ -148,6 +148,7 @@ def test_addserver_flow_end_to_end_with_anon():
     run(mgr.on_console_text(ADMIN, 1, "irc.libera.chat"))
     run(mgr.on_console_text(ADMIN, 1, "6697"))
     run(mgr.on_callback(ADMIN, "flow:set:yes"))      # tls (button)
+    run(mgr.on_callback(ADMIN, "flow:set:yes"))      # verify certificate
     run(mgr.on_console_text(ADMIN, 1, "mynick"))
     run(mgr.on_callback(ADMIN, "flow:set:none"))     # auth (button), skips password
     run(mgr.on_callback(ADMIN, "flow:set:anon"))     # privacy (button) -> completes
@@ -613,6 +614,7 @@ def test_completed_flow_and_reconnect_arm_connect_timeout():
     run(mgr.on_console_text(ADMIN, 1, "irc.example.org"))
     run(mgr.on_console_text(ADMIN, 1, "6697"))
     run(mgr.on_callback(ADMIN, "flow:set:yes"))    # tls
+    run(mgr.on_callback(ADMIN, "flow:set:yes"))    # verify certificate
     run(mgr.on_console_text(ADMIN, 1, "mynick"))
     run(mgr.on_callback(ADMIN, "flow:set:none"))   # auth none
     run(mgr.on_callback(ADMIN, "flow:set:off"))    # privacy off -> completes
@@ -628,6 +630,7 @@ def _complete_addflow(mgr, name="libera", nick="mynick"):
     run(mgr.on_console_text(ADMIN, 1, "irc.example.org"))
     run(mgr.on_console_text(ADMIN, 1, "6697"))
     run(mgr.on_callback(ADMIN, "flow:set:yes"))    # tls
+    run(mgr.on_callback(ADMIN, "flow:set:yes"))    # verify certificate
     run(mgr.on_console_text(ADMIN, 1, nick))
     run(mgr.on_callback(ADMIN, "flow:set:none"))   # auth none (skips password)
     run(mgr.on_callback(ADMIN, "flow:set:off"))    # privacy off -> completes
