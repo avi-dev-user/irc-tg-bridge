@@ -14,6 +14,18 @@ from typing import Optional
 AUTH_METHODS = ("sasl", "nickserv", "none")
 
 
+def irc_username(nick: str) -> str:
+    """Derive a conservative per-network ident from the chosen nick.
+
+    WeeChat otherwise inherits the operating-system account (often ``root`` on
+    a server), exposing deployment details in every IRC WHOIS. Keep only the
+    portable ident characters and cap the result for older IRCds.
+    """
+    value = "".join(c.lower() if c.isalnum() else "_" for c in nick if c.isascii())
+    value = value.strip("_")[:10]
+    return value or "ircuser"
+
+
 def is_valid_nick(value: str) -> bool:
     """An IRC nick must be ASCII with no spaces; a Hebrew nick is rejected by the
     server ("Erroneous Nickname") and never registers. Shared by the add-server
@@ -156,6 +168,8 @@ def build_addserver_commands(d: dict) -> list[str]:
     cmds = [
         f"/server add {name} {host}/{port}{tls_flag}",
         f"/set irc.server.{name}.nicks {nick}",
+        f"/set irc.server.{name}.username {irc_username(nick)}",
+        f"/set irc.server.{name}.realname {nick}",
         # WeeChat holds no connection across a restart, and an unattended
         # library upgrade restarting the unit is enough to lose every network.
         # Without autoconnect the /connect below is a one-off and the server

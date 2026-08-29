@@ -297,11 +297,15 @@ class Manager:
         self._addflow = None
         privacy = data.get("privacy", "off")
         is_anon = privacy == "anon"
-        for cmd in build_addserver_commands(data):
-            await self._backend.send_command(CORE_BUFFER, cmd)
+        commands = build_addserver_commands(data)
         if is_anon:
-            for cmd in build_anon_commands(data["name"]):
-                await self._backend.send_command(CORE_BUFFER, cmd)
+            # Anonymity must be fail-closed from the very first connection.
+            # Insert its proxy and identity hardening before /connect; applying
+            # it afterwards briefly exposes the direct address/OS username.
+            connect_at = commands.index(f'/connect {data["name"]}')
+            commands[connect_at:connect_at] = build_anon_commands(data["name"])
+        for cmd in commands:
+            await self._backend.send_command(CORE_BUFFER, cmd)
         self._db.upsert_server(
             data["name"], anon=is_anon, tor=privacy in ("tor", "anon"),
             tls=bool(data.get("tls")), auth_method=data.get("auth", "none"),

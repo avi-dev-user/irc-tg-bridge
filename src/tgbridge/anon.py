@@ -21,8 +21,10 @@ def build_anon_commands(name: str) -> list[str]:
     cmds = [
         f"/set irc.server.{name}.proxy tor",   # force Tor, fail-closed
         f"/set irc.server.{name}.ipv6 off",
-        f'/set irc.server.{name}.username ""',   # neutral ident
-        f'/set irc.server.{name}.realname ""',   # neutral realname
+        # Empty values inherit the OS account in WeeChat and can expose `root`.
+        # Use explicit neutral values so there is no unsafe fallback.
+        f"/set irc.server.{name}.username anonymous",
+        f"/set irc.server.{name}.realname anonymous",
         f'/set irc.server.{name}.msg_part ""',   # no client-identifying part msg
         f'/set irc.server.{name}.msg_quit ""',   # no client-identifying quit msg
     ]

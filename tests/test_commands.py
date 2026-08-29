@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from tgbridge.commands import (  # noqa: E402
-    AddServerFlow, build_addserver_commands, parse_list_reply,
+    AddServerFlow, build_addserver_commands, irc_username, parse_list_reply,
     parse_names_reply, strip_bot_mention,
 )
 
@@ -85,6 +85,23 @@ def test_build_commands_sasl_uses_secured_data():
         < cmds.index("/connect libera")
     # the raw password never appears in a server option, only in secured data
     assert not any("sasl_password pw" in c for c in cmds)
+
+
+def test_build_commands_use_nick_identity_instead_of_os_user():
+    cmds = build_addserver_commands({
+        "name": "efnet", "host": "irc.deft.com", "port": 6697,
+        "tls": True, "nick": "NoCarrier", "auth": "none", "privacy": "off",
+    })
+    assert "/set irc.server.efnet.username nocarrier" in cmds
+    assert "/set irc.server.efnet.realname NoCarrier" in cmds
+    assert cmds.index("/set irc.server.efnet.username nocarrier") \
+        < cmds.index("/connect efnet")
+
+
+def test_irc_username_is_portable_and_never_empty():
+    assert irc_username("Some[Nick]") == "some_nick"
+    assert irc_username("---") == "ircuser"
+    assert irc_username("VeryLongNickname") == "verylongni"
 
 
 def test_build_commands_nickserv():

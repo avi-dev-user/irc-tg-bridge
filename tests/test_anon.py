@@ -25,8 +25,8 @@ def test_anon_disables_dcc():
 
 def test_anon_scrubs_identity():
     cmds = build_anon_commands("s")
-    assert '/set irc.server.s.username ""' in cmds
-    assert '/set irc.server.s.realname ""' in cmds
+    assert "/set irc.server.s.username anonymous" in cmds
+    assert "/set irc.server.s.realname anonymous" in cmds
     assert '/set irc.server.s.msg_quit ""' in cmds
 
 

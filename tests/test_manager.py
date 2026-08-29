@@ -157,6 +157,8 @@ def test_addserver_flow_end_to_end_with_anon():
     assert "/connect libera" in cmds
     assert "/set irc.server.libera.proxy tor" in cmds       # anon enforcement ran
     assert '/set irc.ctcp.version ""' in cmds
+    assert cmds.index("/set irc.server.libera.proxy tor") \
+        < cmds.index("/connect libera")
     srv = db.get_server("libera")
     assert srv["anon"] == 1 and srv["tor"] == 1
     assert mgr._addflow is None and mgr._flow_msg_id is None  # flow finished
